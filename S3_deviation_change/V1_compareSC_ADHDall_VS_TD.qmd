@@ -1,0 +1,591 @@
+---
+title: "S1_compareSC_ADHDall_VS_TD"
+format: html
+editor: visual
+author: Xiaoyu Xu
+---
+
+```{r}
+#| label: load-packages-data
+#| include: false
+rm(list=ls())
+library(ggplot2)
+library(RColorBrewer)
+library(tidyverse)
+library(mgcv)
+library(openxlsx)
+library(parallel)
+library(scales)
+library(psych)
+# library(reshape) # patchwork is a modern alternative
+library(patchwork)
+
+# Set parameters for Yeo7 atlas
+atlas_name <- "Yeo17"
+resolution <- 15
+edgenum <- resolution * (resolution + 1) / 2
+
+# Set paths
+homepath <- "D:/code/SC_ADHD"
+inputFolder <- file.path(homepath, "datasets", "results", "S2")
+derivFolder <- file.path(homepath, "datasets", "results", "S2")
+functionFolder.SCDev <- file.path(homepath, "code", "functionFolder.SCDev", "gamfunction")
+# Assuming plotmatrix.R is here
+functionFolder.custom <- file.path(homepath, "code", "functions") 
+FigureFolder <- file.path(homepath, "Figures", atlas_name, "S3")
+
+# Create figure directory
+if (!dir.exists(FigureFolder)) dir.create(FigureFolder, recursive = TRUE)
+
+# Source custom functions
+source(file.path(functionFolder.custom, "plotmatrix.R"))
+source(file.path(functionFolder.SCDev, "SCrankcorr.R"))
+# This function is for group comparisons
+source(file.path(functionFolder.SCDev, "gam_factor_interaction_disease.R")) 
+# This one is likely not needed if the one above is used, but sourced just in case
+source(file.path(functionFolder.SCDev, "gamsmooth.R")) 
+
+# Load data
+cat("Loading all necessary data files...\n")
+# The main dataset with all subjects
+all_combat_data <- readRDS(file.path(homepath, "datasets", "interfileFolder", "SCdata_Yeo17_CV75_sumSCinvnode.sum.msmtcsd.combat_match_TD_ADHDall_covDiagnose.rds"))
+# GAM statistics (used for coloring, etc.)
+gamresult.TD <- readRDS(file.path(inputFolder, paste0("gam_stats_TD_res", resolution, ".rds")))
+gamresult.ADHD <- readRDS(file.path(inputFolder, paste0("gam_stats_ADHD_res", resolution, ".rds")))
+# Derivative data
+derivativeTD <- readRDS(file.path(derivFolder, paste0('derivative_df_TD_res', resolution, '.rds')))
+derivativeADHD <- readRDS(file.path(derivFolder, paste0('derivative_df_ADHD_res', resolution, '.rds')))
+# Fitted value data (for individual plots)
+plotdata.TD <- readRDS(file.path(homepath, "datasets", "results", "S2", paste0("plotdatasum_scaled_", atlas_name, "_TD.rds")))
+plotdata.ADHD <- readRDS(file.path(homepath, "datasets", "results", "S2", paste0("plotdatasum_scaled_", atlas_name, "_ADHD.rds")))
+# Models (for residual calculation)
+gammodelsumTD <- readRDS(file.path(inputFolder, paste0("gam_models_TD_scaled_res", resolution, ".rds")))
+gammodelsumADHD <- readRDS(file.path(inputFolder, paste0("gam_models_ADHD_scaled_res", resolution, ".rds")))
+
+```
+
+## Step1 Compare SC mean between ADHDall VS TD
+
+1.  Group effects on SCstrength: SCstrength \~ if_TD + s(age) + covariates
+2.  Interaction effects of age by ADHDall or TD: SCstrength \~ s(age, by=if_TD) + covariates GAMM will be used to examine the group effects on SC strength. ADHDall VS TD
+
+```{r}
+#| label: Step1-Group-Comparison
+# Prepare the data for interaction analysis
+# The data is already scaled from previous steps, we just need to set the group factor
+interaction_data <- all_combat_data %>%
+  # Ensure ADHD is a factor with TD as the reference level
+  mutate(
+    diagnosis = factor(ADHD, levels = c(0, 1), labels = c(0, 1)),
+    sex = as.factor(sex)
+  ) %>%
+  drop_na() # Drop any remaining NAs
+
+# Run interaction analysis
+# Note: This can be time-consuming
+interaction_results_file <- file.path(inputFolder, paste0("Interaction_Age_TD-ADHD_", atlas_name, ".rds"))
+
+# Use a switch to run or load results
+# In your terminal, you can run `export RUN_ANALYSIS=true` before starting R
+# or just manually set run_now <- TRUE
+run_now <- !file.exists(interaction_results_file) 
+
+
+
+# # ============ DEBUGGING BLOCK: RUN ONE ITERATION LOCALLY ============
+# cat("--- Starting single-iteration debug run ---\n")
+# 
+# # Manually define the variables that would be in the parallel environment
+# # This simulates what clusterExport should be doing
+# i <- 1 # Test with the first edge
+# dependentvar <- paste0("SC.", i, "_h")
+# dataname <- "interaction_data" # Note: we use the actual string here
+# knots <- 3
+# # Print the class of every variable being passed to the function
+# cat("Class of 'dependentvar':", class(dependentvar), "\n")
+# cat("Class of 'dataname':", class(dataname), "\n")
+# cat("Class of 'smooth_var':", class("age"), "\n")
+# cat("Class of 'int_var':", class("diagnosis"), "\n")
+# cat("Class of 'covariates':", class("sex+mean_fd"), "\n")
+# cat("Class of 'knots':", class(knots), "\n") # Check 'knots' specifically
+# cat("Class of 'set_fx':", class(TRUE), "\n")
+# 
+# # Now, call the function directly
+# debug_res <- gam.smooth.predict.interaction(
+#   region = dependentvar,
+#   dataname = dataname,
+#   smooth_var = "age",
+#   int_var = "diagnosis",
+#   covariates = "sex+mean_fd",
+#   knots = knots,
+#   set_fx = TRUE
+# )
+# 
+# cat("--- Single-iteration debug run finished successfully ---\n")
+# # If the code reaches here without error, the problem is definitely in the parallel setup.
+# # If it errors out, the traceback() will point to the exact line in your custom function.
+# # ======================== END DEBUGGING BLOCK =========================
+
+interaction_data_z <- interaction_data
+sc_columns <- names(interaction_data_z)[startsWith(names(interaction_data_z), "SC.")]
+
+for (col in sc_columns){
+  interaction_data_z[[col]] <- as.vector(scale(interaction_data_z[col]))
+}
+
+
+if (run_now) {
+  cat("Running interaction analysis...\n")
+  set.seed(925)
+  knots = 3
+  n_cores <- detectCores()-8
+  cl <- makeCluster(n_cores)
+  clusterEvalQ(cl,{
+    library(tidyr)
+    library(mgcv)
+    library(gratia)
+    library(tidyverse)
+    library(ecostats)
+  })
+  # The function gamm_factor_interaction needs a dataname string
+  dataname_int <- "interaction_data_z"
+  assign(dataname_int, interaction_data, envir = .GlobalEnv)
+
+  export_list <- c("interaction_data_z", 
+                 "dataname_int", 
+                 "gam.smooth.predict.interaction", 
+                 "knots", 
+                 "edgenum" # Export edgenum just in case, it's good practice
+                 )
+
+
+  clusterExport(cl, varlist = export_list, envir = .GlobalEnv)
+  
+  Int.results <- parLapply(cl, 1:edgenum, function(i) {
+    dependentvar <- paste0("SC.", i, "_h")
+    
+    # Assuming gamm.smooth.predict.interaction is an alias for gamm_factor_interaction
+    # and it's designed for this kind of analysis
+    gam.res <- gam.smooth.predict.interaction(
+        region = dependentvar,
+        dataname = dataname_int,
+        smooth_var = "age",
+        int_var = "diagnosis", # The grouping variable
+        covariates = "sex+mean_fd",
+        knots = knots,
+        set_fx = TRUE
+    )
+    gam.res <- as.data.frame(gam.res[[1]])
+    gam.res$parcel <- dependentvar # Use 'parcel' for consistency
+    return(gam.res)
+  })
+  
+  rm(list=dataname_int, envir=.GlobalEnv) # Clean up global variable
+  
+  Int.results.df <- dplyr::bind_rows(Int.results)
+  saveRDS(Int.results.df, interaction_results_file)
+} else {
+  cat("Loading existing interaction results...\n")
+  Int.results.df <- readRDS(interaction_results_file)
+}
+
+# Process results: extract interaction term results and apply FDR
+# Your original code takes every second row, assuming the function returns results for both levels.
+# This depends heavily on the output of `gamm_factor_interaction`. Let's assume this is correct.
+# Int.results.df_final <- Int.results.df[seq(from = 2, to = nrow(Int.results.df), by = 2), ]
+Int.results.df_final <- Int.results.df
+Int.results.df_final$p_interaction_fdr <- p.adjust(Int.results.df_final$anova.int.pvalue, method = "fdr")
+Int.results.df_final$p_group_fdr <- p.adjust(Int.results.df_final$P.disease, method = "fdr")
+
+# Summary of findings
+cat(paste0(sum(Int.results.df_final$p_interaction_fdr < 0.05, na.rm=T), " edges have significant diagnosis-by-age interaction (FDR corrected).\n"))
+cat(paste0(sum(Int.results.df_final$p_group_fdr < 0.05, na.rm=T), " edges have significant main effect of diagnosis (FDR corrected).\n"))
+
+```
+
+## Step2 Plot effect size matrix
+
+1.  Interaction effect size matrix: chisq
+2.  Group effect size matrix: T stats (2 group)
+
+```{r}
+#| label: Step2
+
+cols_to_convert <- c("anova.int.pvalue", "anova.int.chisq", "p_interaction_fdr")
+
+Int.results.df_final <- Int.results.df_final %>%
+  mutate(across(all_of(cols_to_convert), as.numeric))
+# 1) Interaction effect size
+SCrankcorr.result <- data.frame(ds.resolution=NA, Interest.var=NA, r.spearman=NA, p.spearman=NA, dataname=NA)
+lmthr <- max(Int.results.df_final$anova.int.chisq)
+
+print(lmthr)
+dataname_for_plot <- "Int.results.df_final"
+  
+axeslabels=c("VS.P", "SM.A", "VS.C", "SM.B", "DA.A", "DA.B", "FP.C", "DM.c", "VA.A", "TP", "FP.A", "VA.B", "DM.A", "FP.B", "DM.B")
+
+resolution <- 15
+axeslabelsGap=T
+PaletteSet <- list(Name="Reds", direction=1, lmmin = min(Int.results.df_final$anova.int.chisq), lmmax = lmthr)
+
+dataname <- "Int.results.df_final"
+FigintChisq <- plotmatrix(dataname, "anova.int.chisq",      
+  ds.resolution = resolution,
+  Pvar = "p_interaction_fdr",       
+  Pvar.noFDR = "anova.int.pvalue",  
+  NAcol = "white",
+  lmthr = lmthr,
+  axeslabels = axeslabels,
+  axeslabelsGap = T,
+  linerange_frame = NA
+)
+
+# print(FigintChisq)
+dataname = "Int.results.df_final"
+ggsave(paste0(FigureFolder, "Yeo17_IntAge_TD_ADHDall_chisq.tiff"), plot = FigintChisq, height=18, width=20, units = "cm")
+
+
+data.tmp <- get(dataname)
+resulttmp <- SCrankcorr(data.tmp, "anova.int.chisq", resolution)
+resulttmp$dataname <- dataname
+SCrankcorr.result <- rbind(SCrankcorr.result, resulttmp)
+
+# Scatter plot(SArank corr)
+correlation.df  <- SCrankcorr(data.tmp, "anova.int.chisq", resolution, dsdata=TRUE)
+maxth <- max(abs(correlation.df$anova.int.chisq), na.rm=T)
+
+ggplot(data=correlation.df)+
+  geom_point(aes(x=SCrank, y=anova.int.chisq, color=anova.int.chisq), size=5)+
+  geom_smooth(aes(x=SCrank, y=anova.int.chisq), method ="lm", color="black", linewidth=1.2)+
+  scale_color_distiller(type="seq", palette = "RdBu", direction = -1, limit=c(-maxth, maxth))+
+  scale_x_continuous(breaks = c(0,20,40,60,80,100,120))+
+  labs(x="S-A connectional axis rank", y="Interaction effect (Chi-square)")+
+  theme_classic()+
+  theme(axis.text=element_text(size=23, color="black"), 
+        axis.title =element_text(size=23, color="black"),aspect.ratio = 0.97,
+        axis.line = element_line(linewidth = 0.6),
+        axis.ticks = element_line(linewidth = 0.6),
+        plot.background=element_rect(fill="transparent"),
+        panel.background=element_rect(fill="transparent"),
+        plot.title = element_text(size=15, hjust = 0.5), legend.position = "none")
+ggsave(paste0(FigureFolder, '/SCstrength_Age/meanbootstrap_chisq_SCrankcorr.tiff'), width=14.2, height =14, units = "cm")
+ggsave(paste0(FigureFolder, '/SCstrength_Age/meanbootstrap_chisq_SCrankcorr.svg'), dpi=600, width=20, height =14, units = "cm")
+
+
+
+# print(SCrankcorr.result)
+
+# 2) Group comparison effect size
+SCrankcorr.result <- data.frame(ds.resolution=NA, Interest.var=NA, r.spearman=NA, p.spearman=NA, dataname=NA)
+lmthr <- max(Int.results.df_final$T.disease)
+
+source(file.path(functionFolder.custom, "plotmatrix.R"))
+
+for (dataname in c("Int.results.df_final")){
+  FigintT <- plotmatrix(dataname, "T.disease", ds.resolution=resolution, Pvar="p_interaction_fdr", NAcol="white", lmthr=lmthr, axeslabels, axeslabelsGap=T, linerange_frame=NA)
+  print(FigintT)
+  
+      
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Matrix", 15,"_MeanCompare_TD_ADHDall_T.tiff"), height=18, width=20, units = "cm")
+  
+  data.tmp <- get(dataname)
+  
+  resulttmp <- SCrankcorr(data.tmp, "T.disease", 15)
+  resulttmp$dataname <- dataname
+  SCrankcorr.result <- rbind(SCrankcorr.result, resulttmp)
+}
+
+print(SCrankcorr.result)
+
+```
+
+## Step3 Plot critical ages for two groups
+
+```{r}
+#| label: Step3
+axeslabels=c("VS.P", "SM.A", "VS.C", "SM.B", "DA.A", "DA.B", "FP.C", "DM.C", "VA.A", "TP", "FP.A", "VA.B", "DM.A", "FP.B", "DM.B") 
+
+# TD
+peakchangeTD <- derivativeTD %>% group_by(label_ID) %>% 
+  summarise(peakchange = mean(age[round(derivative, 4) == max(round(derivative, 4))]),
+            onsetage = if (sum(derivative > 0) > 0){min(age[derivative > 0])}else{NA})
+
+peakchangeTD$SCID <- gsub("SC.", "", peakchangeTD$label_ID)
+peakchangeTD$SCID <- gsub("_h", "", peakchangeTD$SCID)
+peakchangeTD$SCID <- as.numeric(peakchangeTD$SCID)
+peakchangeTD <- peakchangeTD[order(peakchangeTD$SCID), ]
+SCrankcorr(peakchangeTD, "peakchange", 15) # rho=0.4912296 P=1.22175e-08
+SCrankcorr(peakchangeTD, "onsetage", 15) # rho=0.5911272 P=6.80377e-12
+
+peakchangeTD <- merge(peakchangeTD, Int.results.df_final, by.x="label_ID", by.y="parcel")
+peakchangeTD <- peakchangeTD[order(peakchangeTD$SCID),]
+peakchangeTD$onsetage[is.na(peakchangeTD$onsetage)] <- max(all_combat_data$age)
+peakchangeTD <- peakchangeTD %>% mutate(
+  sig_noFDR=case_when(
+    anova.int.pvalue < 0.05 ~ T,
+    .default = F
+  ),
+  peakchange2=case_when(
+    sig_noFDR==T ~ peakchange,
+    .default = NA
+  ),
+  onsetage2=case_when(
+    sig_noFDR==T ~ onsetage,
+    .default = NA
+  )
+)
+
+# ADHD
+peakchangeADHD <- derivativeADHD %>% group_by(label_ID) %>% 
+  summarise(peakchange = mean(age[round(derivative, 4) == max(round(derivative, 4))]),
+            onsetage = if (sum(derivative > 0) > 0){min(age[derivative > 0])}else{NA})
+peakchangeADHD$SCID <- gsub("SC.", "", peakchangeADHD$label_ID)
+peakchangeADHD$SCID <- gsub("_h", "", peakchangeADHD$SCID)
+peakchangeADHD$SCID <- as.numeric(peakchangeADHD$SCID)
+peakchangeADHD <- peakchangeADHD[order(peakchangeADHD$SCID), ]
+SCrankcorr(peakchangeADHD, "peakchange", 15) # rho=0.3674924 P=3.643818e-05
+SCrankcorr(peakchangeADHD, "onsetage", 15) # rho=0.5290456 2.140903e-08
+
+peakchangeADHD <- merge(peakchangeADHD, Int.results.df_final, by.x="label_ID", by.y="parcel")
+peakchangeADHD <- peakchangeADHD[order(peakchangeADHD$SCID),]
+peakchangeADHD$onsetage[is.na(peakchangeADHD$onsetage)] <- max(all_combat_data$age)
+peakchangeADHD <- peakchangeADHD %>% mutate(
+  sig_noFDR=case_when(
+    anova.int.pvalue < 0.05 ~ T,
+    .default = F
+  ),
+  peakchange2=case_when(
+    sig_noFDR==T ~ peakchange,
+    .default = NA
+  ),
+  onsetage2=case_when(
+    sig_noFDR==T ~ onsetage,
+    .default = NA
+  )
+)
+
+lmmax <- max(c(peakchangeTD$onsetage2, peakchangeADHD$onsetage2), na.rm=T)
+lmmin <- min(c(peakchangeTD$onsetage2, peakchangeADHD$onsetage2), na.rm=T)
+PaletteSet <- list(Name="BuPu", drirection=1, lmmin = lmmin, lmmax = lmmax)
+
+Matonset.TD <- plotmatrix(dataname="peakchangeTD", variable="onsetage2", ds.resolution=resolution, Pvar=NA, NAcol="white", lmthr=NA, axeslabels=axeslabels, axeslabelsGap=T, linerange_frame=NA, PaletteSet=PaletteSet)
+
+filename<-paste0(FigureFolder, "/SCstrength_Age/Matrix_onsetage_delLM_TD_onlysig.tiff")
+ggsave(filename, Matonset.TD,  height = 18, width = 20, units = "cm")
+
+Matonset.ADHD <- plotmatrix(dataname="peakchangeADHD", variable="onsetage2", ds.resolution=resolution, Pvar=NA, NAcol="white", lmthr=NA, axeslabels=axeslabels, axeslabelsGap=T, linerange_frame=NA, PaletteSet=PaletteSet)
+
+filename<-paste0(FigureFolder, "/SCstrength_Age/Matrix_onsetage_delLM_ADHD_onlysig.tiff")
+ggsave(filename, Matonset.ADHD,  height = 18, width = 20, units = "cm")
+
+
+```
+
+## Step4 Plot varying trajectories of SC
+
+```{r}
+#| label: Step4
+Yeo17_SCrank <- SCrankcorr(Int.results.df_final, "T.disease", resolution, dsdata = T)
+Yeo17_SCrank$SC_label <- paste0("SC.", 1:edgenum, "_h")
+
+all_combat_data <- all_combat_data %>%
+  # Ensure ADHD is a factor with TD as the reference level
+  mutate(
+    diagnosis = factor(ADHD, levels = c(0, 1), labels = c(0, 1)),
+    sex = as.factor(sex)
+  ) %>%
+  drop_na() # Drop any remaining NAs
+
+
+residualpoint <- function(modobj, smooth_var, dataname=NA){
+  if (inherits(modobj, "gam")) {
+    model <- modobj
+  } else if (inherits(modobj$gam, "gam")) {
+    model <- modobj$gam
+  } else {
+    stop("Can't find a gam object to plot")
+  }
+  
+  if (is.na(dataname)){
+    df <- model$model
+  }else{
+    df <- get(dataname)
+  }
+  theseVars <- attr(model$terms,"term.labels")
+  varClasses <- attr(model$terms,"dataClasses")
+  thisResp <- as.character(model$terms[[2]])
+
+  
+  df.select <- df %>% select(all_of(c(theseVars, thisResp)))
+  print(df.select)
+  
+  for (v in c(1:length(theseVars))) {
+    thisVar <- theseVars[[v]]
+    thisClass <- varClasses[thisVar]
+    if (thisClass=="character"){
+      df.select[,thisVar] <- as.factor(df.select[,thisVar])
+      thisClass <- "factor"
+    }
+    
+    if (thisVar != smooth_var) {
+      
+      tab.tmp<-table(df.select[,thisVar])
+      levelact<-which.max(tab.tmp)
+      switch (thisClass,
+              "numeric" = {df.select[,thisVar] = median(df.select[,thisVar])},
+              "factor" = {df.select[,thisVar] = levels(df.select[,thisVar])[[levelact]]},
+              "ordered" = {df.select[,thisVar] = levels(df.select[,thisVar])[[levelact]]})
+    }}
+  
+  pred.df <- predict(model, newdata=df.select, type="response")
+  resid.df  <- df[[thisResp]] - predict(model, newdata=df, type="response")+pred.df
+  # print(df[[smooth_var]])
+  
+  resid.df_all <- data.frame(var1 = as.numeric(resid.df), var2 = df[[smooth_var]], subID = df$subID)
+  names(resid.df_all) <- c("Response", smooth_var, "subID")
+  
+  return(resid.df_all)
+}
+
+
+### plot
+tabInt <- Int.results.df_final[Int.results.df_final$anova.int.pvalue<0.05,]
+# addSC <- data.frame(matrix(NA, 1, 11))
+# names(addSC) <- names(tabInt)
+# addSC$parcel[1] <- "SC.1_h"
+tabInt <- rbind(addSC, tabInt)
+print(colnames(all_combat_data))
+print(gammodelsumTD[[1]]$formula) 
+for (i in 1:nrow(tabInt)){
+  region <- tabInt$parcel[i]
+  idx <- gsub("SC.", "", region)
+  idx <- as.numeric(gsub("_h", "", idx))
+  
+  plotdf.TD <- plotdata.TD %>% filter(SC_label == region)
+  plotdf.ADHD <- plotdata.ADHD %>% filter(SC_label == region)
+  plotdf.TD$if_TD <- "TD"
+  plotdf.ADHD$if_TD <- "ADHD-all"
+  
+  plotdf.tmp <- rbind(plotdf.TD, plotdf.ADHD)
+  plotdf.tmp$if_TD <- factor(plotdf.tmp$if_TD, levels=c("TD", "ADHD-all"))
+  
+  resid.df.TD <- residualpoint(gammodelsumTD[[idx]], "age", dataname="all_combat_data")
+  resid.df.TD <- resid.df.TD %>% filter(subID %in% all_combat_data$subID[all_combat_data$if_TD=="TD"]) %>%
+    filter(Response > mean(Response)-3*sd(Response), Response < mean(Response)+3*sd(Response))
+  resid.df.ADHD <- residualpoint(gammodelsumADHD[[idx]], "age", dataname="all_combat_data")
+  resid.df.ADHD <- resid.df.ADHD %>% filter(subID %in% all_combat_data$subID[all_combat_data$if_TD=="ADHD-all"]) %>%
+    filter(Response > mean(Response)-3*sd(Response), Response < mean(Response)+3*sd(Response))
+  
+  figInt <- ggplot(data=plotdf.tmp)+
+    geom_point(data=resid.df.TD, aes(x=age, y=Response), color="gray", alpha=0.3)+
+    geom_line(data=resid.df.TD, aes(x=age, y=Response, group=subID), color="gray", alpha=0.3)+
+    geom_point(data=resid.df.ADHD, aes(x=age, y=Response), color="#8C6BB1", alpha=0.3)+
+    geom_line(data=resid.df.ADHD, aes(x=age, y=Response, group=subID), color="#8C6BB1", alpha=0.3)+
+    geom_ribbon(aes(x=age, ymin=selo, ymax=sehi, fill=if_TD), alpha=0.3)+
+    geom_line(aes(x=age, y=fit, color=if_TD), linewidth=1)+
+    scale_color_manual(values = c("black", "#810F7C"))+
+    scale_fill_manual(values = c("black", "#810F7C"))+
+    #scale_x_continuous(breaks = NULL)+
+    labs(x=NULL, y="SC strength", title = paste0(gsub("_h","", plotdf.tmp$parcel[1]), " SCrank=", Yeo17_SCrank$SCrank[Yeo17_SCrank$SC_label==plotdf.tmp$SC_label[1]]))+
+    theme_classic()+
+    theme(axis.text.y=element_text(size=20.5, color="black"), 
+          axis.text.x = element_blank(),    # 隐藏标签
+          axis.ticks.x = element_blank(),
+          axis.title =element_text(size=20.5, color="black"),aspect.ratio = 0.7,
+          plot.title = element_text(size=20.5, hjust=0.5, color="black"),
+          plot.background=element_rect(fill="transparent"),
+          panel.background=element_rect(fill="transparent"),
+          legend.position = 'none')
+  
+  deriTD <- derivativeTD %>% filter(label_ID == region)
+  deriADHD <- derivativeADHD %>% filter(label_ID == region)
+  deriTD$significant.derivative[deriTD$significant==F] <- NA
+  deriADHD$significant.derivative[deriADHD$significant==F] <- NA
+  #deriTD$significant.derivative <- abs(deriTD$significant.derivative)
+  #deriADHD$significant.derivative <- abs(deriADHD$significant.derivative)
+  # age_range <- range(deriTD$age) 
+  deriTD$h <- deriADHD$h <- 1
+  linerange_frame<-data.frame(x=c(6.30,16.750), ymin =rep(0, times=2), ymax =rep(1, times=2),y=c(0, 1), xmin=rep(6.30, times=2), xmax=rep(16.75, times=2))
+  maxth <- max(abs(c(deriTD$significant.derivative, deriADHD$significant.derivative)), na.rm = T)
+  minth <- min(c(deriTD$significant.derivative, deriADHD$significant.derivative), na.rm = T)
+  # TD derivative
+  derivplot.TD <-ggplot(data=deriTD)+
+    geom_bar(aes(x=age, y=1, fill = significant.derivative, color=significant.derivative),stat = "identity", position = "stack")+
+    geom_linerange(data=linerange_frame, aes(y=y, xmin =xmin, xmax =xmax), color="black", linewidth=0.5)+
+    geom_linerange(data=linerange_frame, aes(x=x, ymin =ymin, ymax =ymax), color="black", linewidth=0.5)+
+    scale_color_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_fill_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_y_continuous(breaks = 0.5, labels="TD")+
+    ylab(NULL)+xlab(NULL)+
+    scale_x_continuous(breaks = NULL)+
+    theme_classic()+
+    theme(axis.text=element_text(size=20.5, color='black'),
+          axis.title = element_text(size = 20.5),
+          axis.line.y=element_blank(),
+          axis.line.x=element_blank(),aspect.ratio = 0.05,
+          axis.ticks.y = element_blank(),
+          legend.position = 'none')
+  # ADHD derivative
+  derivplot.ADHD <-ggplot(data=deriADHD)+
+    geom_bar(aes(x=age, y=1, fill = significant.derivative, color=significant.derivative),stat = "identity", position = "stack")+
+    geom_linerange(data=linerange_frame, aes(y=y, xmin =xmin, xmax =xmax), color="black", linewidth=0.5)+
+    geom_linerange(data=linerange_frame, aes(x=x, ymin =ymin, ymax =ymax), color="black", linewidth=0.5)+
+    scale_color_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_fill_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_y_continuous(breaks = 0.5, labels="ADHD")+
+    ylab(NULL)+xlab("Age (years)")+
+    scale_x_continuous(breaks = c(7, 9, 11, 13, 15))+
+    theme_classic()+
+    theme(axis.text=element_text(size=20.5, color='black'),
+          axis.title = element_text(size = 20.5),
+          axis.line.y=element_blank(),
+          axis.line.x=element_blank(),aspect.ratio = 0.05,
+          axis.ticks.y = element_blank(),
+          legend.position = 'none')
+  
+  combined_plot <- figInt / derivplot.TD / derivplot.ADHD + plot_layout(ncol=1, nrow=3)
+  print(combined_plot)
+
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Interaction_Age_trajectories_TDvsADHDall/Varying_SCstrength_traj_", gsub("_h","", plotdf.tmp$SC_label[1]),".tiff"), combined_plot, width = 14.5, height=14, units = "cm")
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Interaction_Age_trajectories_TDvsADHDall/Varying_SCstrength_traj_", gsub("_h","", plotdf.tmp$SC_label[1]),".svg"), combined_plot, width = 14, height=14, units = "cm")
+  
+}
+
+```
+
+## Step5 Plot first derivative gaps
+
+derivative.diff = derivative.ADHD - derivative.TD
+
+```{r}
+derivativeADHD$if_TD <- "ADHD"
+derivativeTD$if_TD <- "TD"
+
+derivativeall <- rbind(derivativeADHD, derivativeTD)
+derivative.gap <- derivativeall %>% group_by(age, label_ID) %>% 
+  summarise(derivative.diff = derivative[if_TD=="ADHD"] - derivative[if_TD=="TD"])
+derivative.gap <- derivative.gap %>% left_join(Int.results.df_final, join_by(label_ID==parcel))
+
+derivative.gap$sig <- (derivative.gap$p_interaction_fdr < 0.05)
+derivative.gap$label_ID <- factor(derivative.gap$label_ID, levels = Int.results.df_final$parcel[order(Int.results.df_final$anova.int.chisq)])
+
+lmthr <- max(abs(Int.results.df_final$anova.int.chisq))
+derivative.gap.sig <- derivative.gap %>% filter(anova.int.pvalue < 0.05)
+Fig <- ggplot()+
+  geom_line(data=derivative.gap.sig, aes(x=age, y=derivative.diff, group=label_ID, color=anova.int.chisq, linetype=sig), linewidth=0.8)+
+  scale_color_distiller(type="seq", palette = "RdBu",direction = -1, limits=c(-lmthr, lmthr))+
+  #scale_color_manual(values=c("#bababa", "#b2182b"))+
+  scale_linetype_manual(values=c("dashed", "solid"))+
+  labs(x="Age (years)", y="Difference in change rate (ADHD-TD)")+
+  theme_classic()+
+  theme(axis.text=element_text(size=20, color="black"), 
+        axis.title =element_text(size=20, color="black"),aspect.ratio = 1,
+        plot.background=element_rect(fill="transparent"),
+        panel.background=element_rect(fill="transparent"),
+        plot.title = element_text(size=20, hjust = 0.5), legend.position = "none")
+
+
+ggsave(paste0(FigureFolder, '/SCstrength_Age/DerivativeDiff_ADHD_TD.tiff'), Fig, width=13, height =14, units = "cm")
+ggsave(paste0(FigureFolder, '/SCstrength_Age/DerivativeDiff_ADHD_TD.svg'), Fig, dpi=600, width=14, height =13, units = "cm")
+
+```

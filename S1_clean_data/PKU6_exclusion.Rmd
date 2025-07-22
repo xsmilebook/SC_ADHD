@@ -1,0 +1,350 @@
+---
+title: "PKU6_exclusion"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+rm(list = ls())
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(psych)
+library(MplusAutomation)
+library(openxlsx)
+library(rjson)
+library(readxl)
+library(stringr)
+result_path <- "D:/code/R_projects/SC_ADHD/datasets/PKU6"
+demo_path <- "D:/code/R_projects/SC_ADHD/datasets/PKU6/demography"
+qcpath <- "D:/code/R_projects/SC_ADHD/datasets/PKU6/qc_json"
+
+file_path <- paste0(demo_path, "/20250421_ADHD_NC_demo_adhdrs_cantab_forCIBR.xlsx")
+
+basic_demo.ADHD <- read_excel(file_path, sheet = "ADHD_demo")
+basic_demo.NC <- read_excel(file_path, sheet = "NC_demo")
+basic_demo.df <- bind_rows(
+  basic_demo.ADHD %>% mutate(ADHD = 1),
+  basic_demo.NC %>% mutate(ADHD = 0)
+)
+basic_demo.df$age = as.numeric(basic_demo.df$`age(m)`) / 12
+basic_demo.df <- basic_demo.df %>% select(-`age(m)`)
+basic_demo.df <- basic_demo.df %>% rename(ID = id)
+
+basic_demo.df$sex <- ifelse(basic_demo.df$sex == "1", "M", "F")
+
+
+
+print(paste("start: ", nrow(basic_demo.df))) # 689
+
+```
+
+### 1) Subjects with MRI data
+```{r MRI}
+
+qcfiles <- list.files(path = qcpath, recursive = T)
+MRsublist<- gsub(".json", "", qcfiles)
+MRsublist.df <- data.frame(subID=MRsublist)
+MRsublist.df$ID <- sub("^sub-(.+)$", "\\1", MRsublist)
+
+basic_demo.df <- basic_demo.df[basic_demo.df$ID %in% MRsublist.df$ID, ]
+print(paste("subject with MRI: ", nrow(basic_demo.df))) # 598
+basic_demo.df <- basic_demo.df %>%
+  left_join(MRsublist.df, by = "ID")
+```
+
+### 2) Sensory issues
+The exclusion criteria of HBN including hearing or visual impairment that prevents participation in study-released tasks. No more exclusion for sensory issues in this study.
+There is no relevent information in PKU6
+```{r sensory}
+
+
+```
+### 3) Intellectual disability
+
+Only participants with IQ over 70 were included.
+There is no IQ info in PKU6
+
+### 4) Major medical or neurological conditions
+
+Children with Congenital_heartDisease were excluded.
+PKU6: skip
+```{r Med}
+
+
+```
+
+### 5) Age & Sex
+
+```{r agesex}
+
+
+basic_demo.df <- basic_demo.df %>% 
+  filter(!is.na(sex) & !is.na(age))
+
+print(paste("filter subject without age and sex: ", nrow(basic_demo.df))) # 568
+
+```
+### 6) MRI qc
+
+```{r MRIqc}
+basic_demo.df$mean_fd <- NA_real_
+for (i in 1:nrow(basic_demo.df)){
+  subIDtmp <- paste0("sub-", basic_demo.df$ID[i])
+  filename <- paste0(qcpath, "/",subIDtmp, ".json" )
+  if (file.exists(filename)){
+    qcjson <- rjson::fromJSON(file=filename)
+    basic_demo.df$mean_fd[i] <- qcjson$subjects[[1]]$mean_fd
+  }
+}
+
+basic_demo.df <- basic_demo.df %>% filter(mean_fd < mean(mean_fd)+3*sd(mean_fd))
+
+print(paste("filter subject with fd: ", nrow(basic_demo.df))) # 544
+
+
+```
+
+
+### Merge treatment
+
+```{r treatment}
+basic_demo.treatment <- read_excel(file_path, sheet = "treatment")
+basic_demo.df <- basic_demo.df %>%
+  left_join(
+    basic_demo.treatment %>% rename(ID = id),
+    by = "ID"
+  )
+
+
+```
+
+### clean cog
+
+```{r}
+
+
+basic_demo.ADHDcantab1 <- read_excel(file_path, sheet = "ADHD_Cantab1")
+basic_demo.ADHDcantab2.raw <- read_excel(file_path, sheet = "ADHD_cantab2")
+
+
+
+basic_demo.NCcantab <- read_excel(file_path, sheet = "NC23_CANTAB")
+# temp_TDCcantab <- read_excel(file_path, sheet = "TDC_CANTAB", col_names = FALSE)
+
+# NC cantab: long table -> wide table
+basic_demo.NCcantab <- basic_demo.NCcantab %>%
+  select(-Test, -`Test Start (Local)`)
+basic_demo.NCcantab <- basic_demo.NCcantab %>%
+  pivot_wider(
+    names_from = `Measure Code`,  
+    values_from = `Result` 
+  )
+
+# TDC cantab: process colnames
+tdc_headers <- read_excel(file_path, sheet = "TDC_CANTAB", skip = 1, n_max = 1, col_names = FALSE)
+
+tdc_headers <- as.character(tdc_headers)
+
+basic_demo.TDCcantab <- read_excel(file_path, sheet = "TDC_CANTAB", skip = 2, col_names = tdc_headers)
+
+basic_demo.TDCcantab <- basic_demo.TDCcantab %>%
+  rename(id = 1) 
+
+
+basic_demo.ADHDcantab1 <- basic_demo.ADHDcantab1 %>%
+  select(where(~ !all(is.na(.))))
+
+basic_demo.ADHDcantab1 <- basic_demo.ADHDcantab1 %>% rename(ID = id)
+basic_demo.NCcantab <- basic_demo.NCcantab %>% rename(ID = "new subject ID")
+basic_demo.TDCcantab <- basic_demo.TDCcantab %>% rename(ID = id)
+colnames(basic_demo.ADHDcantab2.raw) <- colnames(basic_demo.TDCcantab)
+
+basic_demo.ADHDcantab1 <- basic_demo.ADHDcantab1 %>%
+  select(
+    ID,                      
+    RVPA,         
+    RVPML, 
+    RVPTFA,
+    RVPTM,
+    RVPTH,
+    RVPPH,
+    SSTSSRT,
+    SSTDEG,
+    SSTDES,
+    SWMBE,
+#    SWMDE,
+#    SWMS,
+#    SWMTE,
+#    SWMWE
+  )
+
+basic_demo.NCcantab <- basic_demo.NCcantab%>%
+  select(
+    ID,                      
+    RVPA,         
+    RVPML, 
+    RVPTFA,
+    RVPTM,
+    RVPTH,
+    RVPPH,
+    SSTSSRT,
+    SSTDEG,
+    SSTDES,
+    SWMBE,
+#    SWMDE,
+#    SWMS,
+#    SWMTE,
+#    SWMWE
+  )
+
+basic_demo.ADHDcantab2 <- basic_demo.ADHDcantab2.raw %>%
+  select(
+    ID,                      
+    RVPA = `RVP A'`,         
+    RVPML = `RVP Mean latency`, 
+    RVPTFA = `RVP Total false alarms`,
+    RVPTM = `RVP Total misses`,
+    RVPTH = `RVP Total hits`,
+    RVPPH = `RVP Probability of hit`,
+    SSTSSRT = `SST SSRT (last half)`,
+    SSTDEG = `SST Direction errors on stop trials`,
+    SSTDES = `SST Direction errors on go trials`,
+    SWMBE = `SWM Between errors`,
+#    SWMDE = `SWM Double errors`,
+#    SWMS = `SWM Strategy`,
+#    SWMTE = `SWM Total errors`,
+#    SWMWE = `SWM Within errors`
+  )
+
+basic_demo.TDCcantab <- basic_demo.TDCcantab %>%
+  select(
+    ID,                      
+    RVPA = `RVP A'`,         
+    RVPML = `RVP Mean latency`, 
+    RVPTFA = `RVP Total false alarms`,
+    RVPTM = `RVP Total misses`,
+    RVPTH = `RVP Total hits`,
+    RVPPH = `RVP Probability of hit`,
+    SSTSSRT = `SST SSRT (last half)`,
+    SWMBE = `SWM Between errors`,
+#    SWMDE = `SWM Double errors`,
+#    SWMS = `SWM Strategy`,
+#    SWMTE = `SWM Total errors`,
+#    SWMWE = `SWM Within errors`
+  )
+
+basic_demo.ADHDcantab2 <- basic_demo.ADHDcantab2 %>%
+  mutate(across(where(is.character), 
+                ~ if_else(str_detect(., "test"), NA_character_, .)))
+basic_demo.TDCcantab <- basic_demo.TDCcantab %>%
+  mutate(across(where(is.character), 
+                ~ if_else(str_detect(., "test"), NA_character_, .)))
+
+
+```
+### merge
+```{r}
+
+# basic_demo.df <- left_join(
+#   basic_demo.df, 
+#   basic_demo.ADHDcantab1, 
+#   by = "ID"
+# )
+# basic_demo.df <- left_join(
+#   basic_demo.df, 
+#   basic_demo.ADHDcantab2, 
+#   by = "ID"
+# )
+# basic_demo.df <- left_join(
+#   basic_demo.df, 
+#   basic_demo.NCcantab, 
+#   by = "ID"
+# )
+# basic_demo.df <- left_join(
+#   basic_demo.df, 
+#   basic_demo.TDCcantab, 
+#   by = "ID"
+# )
+
+
+basic_demo.ADHDcantab2 <- basic_demo.ADHDcantab2 %>%
+  mutate(across(.cols = !ID, .fns = as.numeric))
+basic_demo.TDCcantab <- basic_demo.TDCcantab %>%
+  mutate(SWMBE = as.numeric(SWMBE))
+cantab.df <- bind_rows(basic_demo.ADHDcantab1, basic_demo.ADHDcantab2, basic_demo.NCcantab, basic_demo.TDCcantab)
+
+
+basic_demo.df <- left_join(
+  basic_demo.df,
+  cantab.df,
+  by = "ID"
+)
+
+
+
+```
+### Merge ICV
+
+```{r ICV}
+ICV_BP <- read.csv(paste0(demo_path, "/ICV_PKU6.txt"), header = F)
+ICV_BP$V3 <- NULL
+names(ICV_BP) <- c("subID", "ICV")
+
+basic_demo.df <- basic_demo.df %>% left_join(ICV_BP, by=c("ID"="subID"))
+
+
+
+write.csv(basic_demo.df, paste0(result_path, "/basic_demo_merge.csv"), row.names = F)
+
+```
+
+
+```{r}
+
+# update IA-3, HI-3, TO-3 <- IA_B, HI_B, TO_B 
+# 筛选出不一致的行
+inconsistent_rows <- basic_demo.df %>%
+  filter(
+    (`IA-3` != `IA_B` & !is.na(`IA-3`)) |
+    (`HI-3` != `HI_B` & !is.na(`HI-3`)) |
+    (`TO-3` != `TO_B` & !is.na(`TO-3`))
+  )
+inconsistent_rows <- inconsistent_rows %>% select("ID", `IA-3`, `HI-3`, `TO-3`, `IA_B`, `HI_B`, `TO_B`)
+inconsistent_rows
+# basic_demo.df <- basic_demo.df %>%
+#   mutate(
+#     `IA-B` = if_else(is.na(`IA-B`) | (`IA-3` != `IA_B`), `IA_3`, `IA-B`),
+#     `HI-B` = if_else(is.na(`HI-B`) | (`HI-3` != `HI_B`), `HI_3`, `HI-B`),
+#     `TO-B` = if_else(is.na(`TO-B`) | (`TO-3` != `TO_B`), `TO_3`, `TO-B`)
+#   )
+
+basic_demo.df <- basic_demo.df %>%
+  mutate(
+    `IA_B` = if_else(is.na(`IA_B`), `IA-3`, `IA_B`),
+    `HI_B` = if_else(is.na(`HI_B`), `HI-3`, `HI_B`),
+    `TO_B` = if_else(is.na(`TO_B`), `TO-3`, `TO_B`)
+  )
+
+
+inconsistent_rows <- basic_demo.df %>%
+  filter(
+    (`IA-3` != `IA_B`) |
+    (`HI-3` != `HI_B`) |
+    (`TO-3` != `TO_B`)
+  )
+inconsistent_rows <- inconsistent_rows %>% select("ID", `IA-3`, `HI-3`, `TO-3`, `IA_B`, `HI_B`, `TO_B`)
+inconsistent_rows
+
+basic_demo.df <- basic_demo.df %>%
+  select(-c(`IA-3`, `HI-3`, `TO-3`))
+
+basic_demo.df$medication[basic_demo.df$medication == "AXT"] <- "ATX"  
+write.csv(basic_demo.df, paste0(result_path, "/basic_demo_PKU6.csv"), row.names = F)
+
+
+```
+
+```{r}
+
+```
+
+

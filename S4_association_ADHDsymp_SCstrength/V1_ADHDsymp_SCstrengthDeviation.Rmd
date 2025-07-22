@@ -1,0 +1,316 @@
+---
+title: "V1_ADHDsymp_SCstrengthDeviation"
+author: "Xiaoyu Xu"
+date: "2025-05-05"
+output: html_document
+---
+
+This script test whether deviations of SC strength assciated with normalized symptoms within ADHD?
+
+
+```{r setup, include=FALSE}
+rm(list=ls())
+library(mgcv);
+library(parallel)
+library(tidyverse)
+library(psych)
+library(chorddiag)
+library(circlize)
+library(RColorBrewer)
+# set resolution
+Yeoresolution <- 17
+if (Yeoresolution == 7){
+  Yeoresolution.delLM = 6
+}else if (Yeoresolution == 17){
+  Yeoresolution.delLM = 15
+}
+element_num <- Yeoresolution.delLM*(Yeoresolution.delLM+1)/2
+# input directory
+wd <- getwd()
+homepath <- str_split_i(wd, "Normative_model", 1)
+demopath <- paste0(homepath, '/Normative_model/demography')
+interfileFolder <- paste0(homepath, '/Normative_model/interfileFolder_ABCD')
+functionFolder <- paste0(homepath, "/Normative_model/functions")
+resultFolder <- paste0(homepath, "/Normative_model/results_ABCD")
+functionFolder.SCDev <- paste0(homepath, "/SC_development/Rcode_SCdevelopment/gamfunction")
+FigureFolder <- paste0(homepath, '/Normative_model/Figures_ABCD/Yeo', Yeoresolution,'/CV75')
+source(paste0(functionFolder, "/lme4symp.R"))
+source(paste0(functionFolder.SCDev, "/gamminteraction.R"))
+source(paste0(functionFolder.SCDev, "/SCrankcorr.R"))
+source(paste0(functionFolder, "/plotmatrix.R"))
+# Load data
+SCdata.sum75.merge.ADHDTD <- readRDS(paste0(interfileFolder, '/SCdata_Yeo',Yeoresolution, '_CV75_sumSCinvnode.deviations_TDtest_ADHD.rds'))
+SCdata.sum75.merge.ADHDTD$sex <- as.factor(SCdata.sum75.merge.ADHDTD$sex)
+SCdata.sum75.merge.ADHDTD$meanFD <- as.numeric(SCdata.sum75.merge.ADHDTD$meanFD)
+SCdata.sum75.merge.ADHDTD$if_TD <- factor(SCdata.sum75.merge.ADHDTD$if_TD, levels = c("TD", "ADHD"))
+SCdata.sum75.merge.ADHDTD$agefactor <- (SCdata.sum75.merge.ADHDTD$age < 10.3)
+SCdata.sum75.merge.ADHDTD$agefactor <- factor(SCdata.sum75.merge.ADHDTD$agefactor, levels = c(T, F), labels=c("young", "old"))
+Behavior <- read.csv(paste0(demopath, "/demo_sublist7.csv"))
+#SCdata.sum75.merge.ADHDTD <- SCdata.sum75.merge.ADHDTD %>% left_join(select(Behavior, scanID, GENERAL.norm, EXT.norm, ADHD.norm, INT.norm, ATT.norm, HI.norm), by="scanID")
+SCdata.ADHD <- SCdata.sum75.merge.ADHDTD %>% filter(if_TD=="ADHD")
+SCdata.TD <- SCdata.sum75.merge.ADHDTD %>% filter(if_TD=="TD")
+
+Intresults <- readRDS(paste0(interfileFolder, "/Interaction_Age_TD-ADHDall_Yeo_SC", element_num,".rds"))
+Int.results.df_final <- Intresults[seq(from=2, to=2*element_num, by = 2),]
+Int.results.df_final$bootstrap_pvalue.fdr <- p.adjust(Int.results.df_final$bootstrap_pvalue, method = "fdr")
+Int.results.df_final$bootstrap.P.disease.fdr <- p.adjust(Int.results.df_final$bootstrap.P.disease, method = "fdr")
+Int.results.df_final[,3:10] <- lapply(Int.results.df_final[,3:10], as.numeric)
+summary(Int.results.df_final)
+Int.results.df_final$parcel <- gsub("_h", "_deviationZ", Int.results.df_final$parcel)
+diagnosis.rs.8_10 <- readRDS(paste0(interfileFolder, "/GroupcompareDeviation_TD-ADHDall_SC_Yeo", element_num, "_8_10_controlAgeSex.rds"))
+diffbyage <- read.csv(paste0(resultFolder, "/ADHDTDgroupwise_T_dev_by_age_SC_Yeo", element_num,"_CV75_controlsex.csv"))
+sigedge.8_10 <- diagnosis.rs.8_10$parcel[diagnosis.rs.8_10$p.fdr < 0.05]
+sigedge.all <- diffbyage$parcel
+
+```
+
+## During all age
+
+1. SC_Deviation ~ Symptom + s(age) + sex
+
+```{r associate}
+dataname <- "SCdata.ADHD"
+#symptomvar <- c("GENERAL.norm", "ATT.norm", "HI.norm", "cbcl_scr_syn_internal_t", "cbcl_scr_syn_external_t", "cbcl_scr_dsm5_adhd_t", "cbcl_scr_syn_anxdep_t", "cbcl_scr_syn_withdep_t", "cbcl_scr_syn_somatic_t", "cbcl_scr_syn_social_t", "cbcl_scr_syn_thought_t", "cbcl_scr_syn_attention_t", "cbcl_scr_syn_rulebreak_t", "cbcl_scr_syn_aggressive_t")
+symptomvar <- c("GENERAL.norm", "EXT.norm", "ADHD.norm", "INT.norm", "ATT.norm", "HI.norm", "cbcl_scr_syn_internal_t", "cbcl_scr_syn_external_t", "cbcl_scr_dsm5_adhd_t","cbcl_scr_syn_attention_t", "cbcl_scr_syn_totprob_t")
+
+cl <- makeCluster(8)
+clusterExport(cl, varlist = ls(), envir = .GlobalEnv)
+invisible(clusterEvalQ(cl, {
+  library(mgcv);
+  library(parallel)
+  library(tidyverse)
+  library(psych)
+  #source(paste0(functionFolder, "/lme4symp.R"))
+  source(paste0(functionFolder.SCDev, "/gamminteraction.R"))
+  source(paste0(functionFolder.SCDev, "/SCrankcorr.R"))
+}))
+
+for (VOI in symptomvar){
+  if (!file.exists(paste0(interfileFolder, '/SCDeviation_', VOI,'_Age_CV75_Yeo', Yeoresolution,'_ADHDall_controlAgeSex.rds'))){
+    print(VOI)
+    clusterExport(cl, varlist = ls(), envir = .GlobalEnv)
+    resultsum <- parLapply(cl, 1:element_num, function(x){
+      region<-paste0("SC.", x, "_deviationZ")
+      gamresult<-gamm.smooth.predict.covariateinteraction(region, dataname, smooth_var="age", int_var=VOI, int_var.predict.percentile=0.1, covariates="sex", knots=3, set_fx = T, increments=100, stats_only=T, if_residual=FALSE)
+      gamresult<-as.data.frame(gamresult)
+      return(gamresult)
+    })
+    
+    
+    resultsum.df <- do.call(rbind, lapply(resultsum, function(x) data.frame(x[[1]])))
+    resultsum.df[,c(4:18)]<-lapply(resultsum.df[,c(4:18)], as.numeric)
+    
+    saveRDS(resultsum.df, paste0(interfileFolder, '/SCDeviation_', VOI,'_Age_CV75_Yeo', Yeoresolution,'_ADHDall_controlAgeSex.rds'))
+  }
+}
+
+
+
+
+```
+
+
+```{r plot_association}
+
+SC_symptom.list <- list()
+SCcorr.df.list <- list()
+j=0
+for (VOI in symptomvar){
+  resultsum.df <- readRDS(paste0(interfileFolder, '/SCDeviation_', VOI,'_Age_CV75_Yeo', Yeoresolution,'_ADHDall_controlAgeSex.rds'))
+  SC_symptom.list[[VOI]] <- resultsum.df
+  ## All 78 edges
+  # symptom effects
+  resultsum.df$bootstrap.P.fdr <- p.adjust(resultsum.df$bootstrap.P.disease, method="fdr")
+  numsig.fdr <- sum(resultsum.df$bootstrap.P.fdr < 0.05)
+  print(paste("After FDR, deviation of", numsig.fdr, "edges are significantly associated with", VOI, "within all edges."))
+  
+  SCcorr.df <- SCrankcorr(resultsum.df, "T.disease", Yeoresolution.delLM)
+  SCcorr.df$symptom <- VOI
+  j=j+1
+  SCcorr.df.list[[j]] <- SCcorr.df
+  
+  ## Edges with significant group-wise difference during 8 to 10.
+  # symptom effects
+  resultsum.df.sigdiag <- resultsum.df %>% filter(parcel %in% sigedge.8_10)
+  resultsum.df.sigdiag$bootstrap.P.fdr <- p.adjust(resultsum.df.sigdiag$bootstrap.P.disease, method="fdr")
+  numsig.fdr1 <- sum(resultsum.df.sigdiag$bootstrap.P.fdr < 0.05)
+  print(paste("After FDR, deviation of", numsig.fdr1, "edges are significantly associated with", VOI, "within group-differed edges"))
+  
+  ## Edges with significant group-wise difference during a period.
+  # symptom effects
+  resultsum.df.sigedge.all <- resultsum.df %>% filter(parcel %in% sigedge.all)
+  resultsum.df.sigedge.all$bootstrap.P.fdr <- p.adjust(resultsum.df.sigedge.all$bootstrap.P.disease, method="fdr")
+  numsig.fdr2 <- sum(resultsum.df.sigedge.all$bootstrap.P.fdr < 0.05)
+  print(paste("After FDR, deviation of", numsig.fdr2, "edges are significantly associated with", VOI, "within group-differed edges during any period."))
+  
+  ### plot matrix
+  # all elements
+  lmthr <- max(abs(resultsum.df$T.disease), na.rm = T)
+  axeslabels=c("VS.P", "SM.A", "VS.C", "SM.B", "DA.A", "DA.B", "FP.C", "DM.C", "VA.A", "TP", "FP.A", "VA.B", "DM.A", "FP.B", "DM.B")
+  matfig0 <- plotmatrix("resultsum.df", "T.disease", Yeoresolution.delLM, Pvar="bootstrap.P.fdr", NAcol="white", lmthr=lmthr, axeslabels=axeslabels, axeslabelsGap=T, linerange_frame=NA, PaletteSet=NA, Pvar.noFDR=NA)
+  ggsave(paste0(FigureFolder, "/SCDeviation_Symptom/Matrix_SC_", VOI, "_association_all_controlAgeSex.tiff"), matfig0, height=18, width=20, units = "cm")
+  # within edges with significant diagnostic effects. (6)
+  resultsum.df2 <- resultsum.df
+  resultsum.df2$T.disease[!(resultsum.df2$parcel %in% sigedge.8_10)] <- NA
+  resultsum.df2$bootstrap.P.disease[!(resultsum.df2$parcel %in% sigedge.8_10)] <- NA
+  resultsum.df2$bootstrap.P.fdr <- p.adjust(resultsum.df2$bootstrap.P.disease, method="fdr")
+  resultsum.df2$bootstrap.P.fdr[!(resultsum.df2$parcel %in% sigedge.8_10)] <- 1
+  lmthr <- max(abs(resultsum.df2$T.disease), na.rm = T)
+  matfig1 <- plotmatrix("resultsum.df2", "T.disease", Yeoresolution.delLM, Pvar="bootstrap.P.fdr", NAcol="white", lmthr=lmthr, axeslabels=axeslabels, axeslabelsGap=T, linerange_frame=NA, PaletteSet=NA, Pvar.noFDR=NA)
+  ggsave(paste0(FigureFolder, "/SCDeviation_Symptom/Matrix_SC_", VOI, "_association_DiagnoseEdges_controlAgeSex.tiff"), matfig1, height=18, width=20, units = "cm")
+  # within edges with significant diagnostic effects during a period. (9)
+  resultsum.df3 <- resultsum.df
+  resultsum.df3$T.disease[!(resultsum.df3$parcel %in% sigedge.all)] <- NA
+  resultsum.df3$bootstrap.P.disease[!(resultsum.df3$parcel %in% sigedge.all)] <- NA
+  resultsum.df3$bootstrap.P.fdr <- p.adjust(resultsum.df3$bootstrap.P.disease, method="fdr")
+  resultsum.df3$bootstrap.P.fdr[!(resultsum.df3$parcel %in% sigedge.all)] <- 1
+  lmthr <- max(abs(resultsum.df3$T.disease), na.rm = T)
+  matfig2 <- plotmatrix("resultsum.df3", "T.disease", Yeoresolution.delLM, Pvar="bootstrap.P.fdr", NAcol="white", lmthr=lmthr, axeslabels=axeslabels, axeslabelsGap=T, linerange_frame=NA, PaletteSet=NA, Pvar.noFDR=NA)
+  ggsave(paste0(FigureFolder, "/SCDeviation_Symptom/Matrix_SC_", VOI, "_association_DiagnoseEdgesAllAge_controlAgeSex.tiff"), matfig2, height=18, width=20, units = "cm")
+  
+  
+  #### Scatter plot
+  if (numsig.fdr1 > 0){
+    if (str_detect(VOI, "adhd")){
+      ytitle <- "ADHD symptom scores"
+    }else if (str_detect(VOI, "attention")){
+      ytitle <- "Attention symptom scores"
+    }else if (str_detect(VOI, "external")){
+      ytitle <- "External symptom scores"
+    }else{ytitle <- VOI}
+    
+    for (i in 1:numsig.fdr1){
+      resultsum.df.sigdiag.fdr <- resultsum.df.sigdiag %>% filter(bootstrap.P.fdr < 0.05)
+      region <- resultsum.df.sigdiag.fdr$parcel[i]
+      
+      residual.df <- gamm.smooth.predict.covariateinteraction(region, dataname, smooth_var="age", int_var=VOI, int_var.predict.percentile=0.1, covariates="sex", knots=3, set_fx = T, increments=100, stats_only=F, if_residual=T)
+      residual.df$subID <- str_split_i(residual.df$scanID, "_ses", 1)
+      
+      subtitle <- bquote(
+        italic("T") == .(round(resultsum.df.sigdiag.fdr$T.disease[i], 2)) * "," ~ 
+          italic(P) == .(round(resultsum.df.sigdiag.fdr$bootstrap.P.fdr[i], 3))
+      )
+      
+      scatterplot <- ggplot(data=residual.df)+
+        geom_line(aes(x=region.res, y=int_var.res, group=subID), color="gray", alpha=0.3)+
+        geom_point(aes(x=region.res, y=int_var.res), color="#de77ae")+
+        geom_smooth(aes(x=region.res, y=int_var.res), fill="#de77ae",color="black", method="lm")+
+        labs(x="SC Deviation", y=ytitle)+
+        theme_classic()+
+        theme(axis.text=element_text(size=20.5, color="black"), 
+              axis.title =element_text(size=20.5, color="black"),
+              aspect.ratio = 0.95,
+              plot.subtitle = element_text(size=20.5, hjust=0.1, vjust=-6, color="black"),
+              plot.background=element_rect(fill="transparent"),
+              panel.background=element_rect(fill="transparent"),
+              legend.text = element_text(size=15, color="black"),
+              legend.title = element_text(size=15, color="black"))
+      
+      ggsave(paste0(FigureFolder, "/SCDeviation_Symptom/Scatter/", region, "_", VOI, "_sigDiagnosis_controlAgeSex.tiff"), scatterplot, width = 13, height=13, units = "cm")
+    }
+  }
+}
+
+SCcorr.df <- do.call(rbind, SCcorr.df.list)
+
+print(SCcorr.df)
+
+
+symass.EXT <- SC_symptom.list[["cbcl_scr_syn_external_t"]]
+symass.ADHD <- SC_symptom.list[["cbcl_scr_dsm5_adhd_t"]]
+symass.ATT <- SC_symptom.list[["cbcl_scr_syn_attention_t"]]
+
+symass.all <- rbind(symass.EXT, symass.ADHD, symass.ATT) %>% filter(parcel %in% sigedge.all)
+symass.all$bootstrap.P.fdr <- p.adjust(symass.all$bootstrap.P.disease, method = "fdr")
+
+write.csv(symass.all, paste0(resultFolder, "/SCDeviation__Age_CV75_Yeo", Yeoresolution,"_ADHDall_controlAgeSex.csv"), row.names = F)
+
+symass.all.sig <- symass.all %>% filter(bootstrap.P.fdr < 0.05)
+
+
+# chord diagram
+Yeo17_SAtab <- read.csv(paste0(resultFolder, '/Yeo17S400_SArank.csv'))
+Yeo17_SAtab$index <- c(0:17)
+limbicindex <- Yeo17_SAtab$index[str_detect(Yeo17_SAtab$NetworkLabel, "Limbic")]
+Yeo17_SAtab <- Yeo17_SAtab %>% filter(! index %in% limbicindex)
+Yeo17_SAtab$RGB <- c("white", "#771183", "#FF0200", "#4680B3", "#2ACCA5", "#499C3D", "#007512", "#C334F4", 
+                            "#F997D8", "#778CB3", "#E89321", "#8A314B", "#0D28FD", "#000083", "#F9FF04", "#D13F52")
+                            
+Yeo17_SAtab$NetworkLabe.short <- c("None", "VS.C", "VS.P", "SM.A", "SM.B", "DA.A", "DA.B", "VA.A", "VA.B", "FP.C", "FP.A", "FP.B", "TP", "DM.C", "DM.A", "DM.B")      
+Yeo17_SAtab <- Yeo17_SAtab[order(Yeo17_SAtab$MedianSA),]
+           
+for (VOI in c("cbcl_scr_syn_external_t", "cbcl_scr_dsm5_adhd_t", "cbcl_scr_syn_attention_t")){
+  symass.tmp <- SC_symptom.list[[VOI]]
+  
+  symass.tmp <- symass.tmp %>% mutate(
+    correstimate2 = case_when(
+      parcel %in% sigedge.all ~ correstimate,
+      .default = NA
+    ))
+  CorrMat <- matrix(NA, Yeoresolution.delLM, Yeoresolution.delLM)
+  
+  CorrMat[lower.tri(CorrMat, diag=T)] <- symass.tmp$correstimate2
+  CorrMat[upper.tri(CorrMat)] <- t(CorrMat)[upper.tri(CorrMat)]
+  delidx.row <- which(rowSums(is.na(CorrMat))==Yeoresolution.delLM)
+  CorrMat <- CorrMat[-delidx.row, -delidx.row]
+  
+  rownames(CorrMat) <- colnames(CorrMat) <- axeslabels[setdiff(1:Yeoresolution.delLM, delidx.row)]
+  CorrMat[upper.tri(CorrMat)] <- NA
+  grid.col <- setNames(Yeo17_SAtab$RGB[Yeo17_SAtab$NetworkLabe.short %in% rownames(CorrMat)], rownames(CorrMat))
+  col_fun <- colorRamp2(seq(from=min(symass.all$correstimate, na.rm=T), to=max(symass.all$correstimate, na.rm=T), length.out=7), brewer.pal(9, "Purples")[2:8])
+  
+  CorrMat2 <- CorrMat
+  CorrMat2[!is.na(CorrMat2)] <- 1
+  
+  ColMat <- col_fun(CorrMat)
+  
+  tiff(paste0(FigureFolder, "/SCDeviation_Symptom/ChordPlot_Corr_", VOI,".tiff"), width = 15, height = 13, units = "cm", res = 300)
+  circos.clear()
+  chordDiagram(x=CorrMat2, grid.col = grid.col, grid.border=NULL, col=ColMat, order=rownames(CorrMat),transparency = 0.5, directional = 0, self.link=1, link.lwd = 2, annotationTrack = "grid", preAllocateTracks = list(track.height = 0.12), big.gap=T)
+  circos.track(track.index = 1, panel.fun = function(x, y) {
+    sector.name <- CELL_META$sector.index
+    if (sector.name %in% c("SM.A", "SM.B")) {
+      
+      circos.text(CELL_META$xcenter, CELL_META$ylim[1] + mm_y(8), sector.name,
+                  facing = "clockwise", niceFacing = TRUE, cex = 1.5)
+    } else {
+      circos.text(CELL_META$xcenter, CELL_META$ylim[1] + mm_y(2), sector.name,
+                  facing = "outside", niceFacing = TRUE, cex = 1.5)
+    }
+  }, bg.border = NA)
+  
+  dev.off()
+  
+}
+
+symass.tmp <- deltacorr[[8]]
+symass.tmp$parcel <- gsub("_delta", "", symass.tmp$parcel)
+symass.tmp <- symass.tmp %>% mutate(
+  correstimate2 = case_when(
+    parcel %in% sigedge.8_10 ~ correstimate,
+    .default = NA
+  )
+)
+
+CorrMat <- matrix(NA, Yeoresolution.delLM, Yeoresolution.delLM)
+
+df <- data.frame(x=rep(1, 10), y=c(1:10))
+ggplot(data = df)+
+  geom_bar(aes(x=1, y=10, fill=y), stat = "identity", position = "stack")+
+  scale_fill_gradientn(colors = brewer.pal(9, "Purples")[2:8]) + theme_minimal()
+
+
+
+
+
+
+
+
+
+
+
+
+
+```
+
+

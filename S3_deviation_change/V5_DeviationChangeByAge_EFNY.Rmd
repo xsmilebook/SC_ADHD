@@ -1,0 +1,507 @@
+---
+title: "V5_DeviationChangeByAge"
+author: "Xiaoyu Xu"
+date: "2025-06-16"
+output: html_document
+---
+
+This script is to test whether the deviations or normalized symptoms decreased with age in ADHD group.
+
+```{r setup, include=FALSE}
+rm(list=ls())
+library(mgcv);
+library(parallel)
+library(tidyverse)
+library(patchwork)
+# set resolution
+Yeoresolution <- 17
+if (Yeoresolution == 7){
+  Yeoresolution.delLM = 6
+}else if (Yeoresolution == 17){
+  Yeoresolution.delLM = 15
+}
+element_num <- Yeoresolution.delLM*(Yeoresolution.delLM+1)/2
+
+# input directory
+homepath <- "D:/code/SC_ADHD"
+demopath <- paste0(homepath, '/demography')
+interfileFolder <- paste0(homepath, '/interfileFolder')
+interfileFolder_ABCD <- paste0(homepath, '/Normative_model/interfileFolder_ABCD')
+functionFolder <- paste0(homepath, "/Normative_model/functions")
+resultFolder <- paste0(homepath, "/Normative_model/results_EFNY")
+resultFolder_ABCD <- paste0(homepath, "/Normative_model/results_ABCD")
+functionFolder.SCDev <- paste0(homepath, "/SC_development/Rcode_SCdevelopment/gamfunction")
+FigureFolder <- paste0(homepath, '/Normative_model/Figures_EFNY/Yeo', Yeoresolution,'/CV75')
+
+source(paste0(functionFolder.SCDev, "/gamsmooth.R"))
+source(paste0(functionFolder.SCDev, "/plotdata_generate.R"))
+source(paste0(functionFolder.SCDev, "/SCrankcorr.R"))
+source(paste0(functionFolder.SCDev, '/gamderivatives.R'))
+# Load data
+SCdata.sum75.merge.ADHDTD <- readRDS(paste0(interfileFolder, '/SCdata_Yeo',Yeoresolution, '_CV75__9ABCDsigEdge.deviations_TDtest_ADHD.rds'))
+SCdata.sum75.merge.ADHDTD$sex <- as.factor(SCdata.sum75.merge.ADHDTD$sex)
+SCdata.sum75.merge.ADHDTD$diagnosis <- factor(SCdata.sum75.merge.ADHDTD$diagnosis, levels = c("TD", "ADHD"))
+# only keep PKU6 ADHD
+SCdata.sum75.merge.ADHDTD <- SCdata.sum75.merge.ADHDTD %>% filter(! (diagnosis=="ADHD" & site != "PKU6"))
+
+Behavior <- read.csv(paste0(demopath, "/THREE_SITES_basic_demo_PKU6.csv"))
+Behavior$ID <- paste0("sub-", Behavior$ID)
+SCdata.ADHD <- SCdata.sum75.merge.ADHDTD %>% filter(diagnosis=="ADHD")
+SCdata.ADHD <- SCdata.ADHD %>% left_join(select(Behavior, ID, medication, IA_B, HI_B, TO_B, IA_F, HI_F, TO_F, RVPA, RVPML, RVPTFA, RVPTM, RVPTH, RVPPH, SSTSSRT, SSTDEG, SSTDES, SWMBE, ICV), by="ID")
+SCdata.TD <- SCdata.sum75.merge.ADHDTD %>% filter(diagnosis=="TD")
+
+diffbyage <- read.csv(paste0(resultFolder_ABCD, "/ADHDTDgroupwise_T_dev_by_age_SC_Yeo", element_num,"_CV75_controlsex.csv"))
+SCdeviationAge_ABCD.ADHD <- readRDS(paste0(interfileFolder_ABCD, "/SigDiagnoseSCDeviation_NormSymptom_Age_Yeo", Yeoresolution ,"_CV75_ADHD.rds")) 
+
+```
+
+## Test the age effects
+
+The dependent variables will be the deviations of SC exhibiting significant group-wise difference and the normalized symptom scores.
+
+```{r development}
+covariates<-"sex"
+dataname.list <- c("SCdata.ADHD", "SCdata.TD")
+smooth_var<-"age"
+sigedge.all <- diffbyage$parcel
+symptomvar <- c("IA_B", "HI_B", "TO_B")
+dependent.var <- c(sigedge.all, symptomvar)
+
+cl <- makeCluster(5)
+clusterExport(cl, varlist = ls(), envir = .GlobalEnv)
+invisible(clusterEvalQ(cl, {
+  library(mgcv)
+  library(parallel)
+  library(tidyverse)
+  source(paste0(functionFolder.SCDev, "/gamsmooth.R"))
+  source(paste0(functionFolder.SCDev, "/plotdata_generate.R"))
+}))
+
+
+for (dataname in dataname.list){
+  #if (!file.exists(paste0(interfileFolder, '/SigDiagnoseSCDeviation_NormSymptom_Age_Yeo', Yeoresolution,'_CV75_',str_split_i(dataname, "SCdata.", 2), '.rds'))){
+    print(dataname)
+    if (str_detect(dataname, "TD")){dependent.var.f <- sigedge.all}else{dependent.var.f <- dependent.var}
+    clusterExport(cl, varlist = ls(), envir = .GlobalEnv)
+    resultsum <- parLapply(cl, 1:length(dependent.var.f), function(x){
+      region<-dependent.var.f[x]
+      gamresult<-gam.fit.smooth(region, dataname, smooth_var, covariates, knots=3, set_fx = T, stats_only = T, mod_only = FALSE)
+      gamresult<-as.data.frame(gamresult)
+      return(gamresult)
+    })
+    
+    gamresultsum.df <- do.call(rbind, lapply(resultsum, function(x) data.frame(x)))
+    gamresultsum.df[,c(2:10)]<-lapply(gamresultsum.df[,c(2:10)], as.numeric)
+    
+    saveRDS(gamresultsum.df, paste0(interfileFolder, '/SigDiagnoseSCDeviation_NormSymptom_Age_Yeo', Yeoresolution,'_CV75_',str_split_i(dataname, "SCdata.", 2), '.rds'))
+  #}
+}
+
+gamresultsum.df.ADHD <- readRDS(paste0(interfileFolder, '/SigDiagnoseSCDeviation_NormSymptom_Age_Yeo', Yeoresolution,'_CV75_ADHD.rds'))
+gamresultsum.df.TD <- readRDS(paste0(interfileFolder, '/SigDiagnoseSCDeviation_NormSymptom_Age_Yeo', Yeoresolution,'_CV75_TD.rds'))
+
+gamresultsum.df.ADHD.SC <- gamresultsum.df.ADHD[str_detect(gamresultsum.df.ADHD$parcel, "SC."),]
+# select only the 5 edges showing significant change in ABCD study
+SCdeviationAge_ABCD.ADHD <- SCdeviationAge_ABCD.ADHD %>% filter(str_detect(parcel, "SC."))
+SCdeviationAge_ABCD.ADHD$bootstrap_p.fdr <- p.adjust(SCdeviationAge_ABCD.ADHD$bootstrap_pvalue, method="fdr")
+sigedge.ABCD <- SCdeviationAge_ABCD.ADHD$parcel[SCdeviationAge_ABCD.ADHD$bootstrap_p.fdr < 0.05]
+gamresultsum.df.ADHD.SC.ABCDsig <- gamresultsum.df.ADHD.SC %>% filter(parcel %in% sigedge.ABCD)
+
+gamresultsum.df.TD.SC <- gamresultsum.df.TD[str_detect(gamresultsum.df.ADHD$parcel, "SC."),]
+gamresultsum.df.ADHD.symp <- gamresultsum.df.ADHD[!str_detect(gamresultsum.df.ADHD$parcel, "SC."),]
+
+gamresultsum.df.ADHD.SC$anova.smooth.p.fdr <- p.adjust(gamresultsum.df.ADHD.SC$anova.smooth.pvalue, method = "fdr")
+gamresultsum.df.ADHD.SC.ABCDsig$anova.smooth.p.fdr <- p.adjust(gamresultsum.df.ADHD.SC.ABCDsig$anova.smooth.pvalue, method = "fdr")
+gamresultsum.df.TD.SC$anova.smooth.p.fdr <- p.adjust(gamresultsum.df.TD.SC$anova.smooth.pvalue, method = "fdr")
+# gamresultsum.df.ADHD.symp$bootstrap_p.fdr <- p.adjust(gamresultsum.df.ADHD.symp$bootstrap_pvalue, method = "fdr")
+# gamresultsum.df.TD.symp$bootstrap_p.fdr <- p.adjust(gamresultsum.df.TD.symp$bootstrap_pvalue, method = "fdr")
+
+### plot the figures for SC
+## Models
+for (dataname in dataname.list){
+  resultsum <- list()
+  if (str_detect(dataname, "TD")){dependent.var.f <- sigedge.all}else{dependent.var.f <- dependent.var}
+  for (x in 1:length(dependent.var.f)){
+    region<-dependent.var.f[x]
+    gamresult<-gam.fit.smooth(region, dataname, smooth_var, covariates, knots=3, set_fx = T, stats_only = F, mod_only = T)
+    resultsum[[x]] <- gamresult
+  }
+  saveRDS(resultsum, paste0(interfileFolder, '/gammodelSigDiagnoseSCDeviation_NormSymptom_Age_Yeo', Yeoresolution,'_CV75_',str_split_i(dataname, "SCdata.", 2),'.rds'))
+}
+gammod.ADHD <- readRDS(paste0(interfileFolder, '/gammodelSigDiagnoseSCDeviation_NormSymptom_Age_Yeo', Yeoresolution,'_CV75_ADHD.rds'))
+gammod.TD <- readRDS(paste0(interfileFolder, '/gammodelSigDiagnoseSCDeviation_NormSymptom_Age_Yeo', Yeoresolution,'_CV75_TD.rds'))
+
+## Plot data
+agevector <- seq(min(SCdata.sum75.merge.ADHDTD$age), max(SCdata.sum75.merge.ADHDTD$age), length.out=1000)
+
+# ADHD
+if (file.exists(paste0(interfileFolder, '/plotdatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_ADHD.rds')) == F){
+  plotdatasum.ADHD <- list()
+  for (x in 1:length(dependent.var)){
+    modobj <- gammod.ADHD[[x]]
+    plotdata<- plotdata_generate(modobj, "SCdata.sum75.merge.ADHDTD", "age", agevector)
+    plotdata$SC_label <- names(plotdata)[13]
+    plotdata[,13] <- NULL
+    plotdatasum.ADHD[[x]] <- plotdata
+  }
+  
+  plotdatasum.ADHD.df <- do.call(rbind, lapply(plotdatasum.ADHD, function(x) data.frame(x)))
+  saveRDS(plotdatasum.ADHD.df, paste0(interfileFolder, '/plotdatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_ADHD.rds'))
+  
+}else{
+  plotdatasum.ADHD.df <- readRDS(paste0(interfileFolder, '/plotdatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_ADHD.rds'))
+}
+
+# TD
+if (file.exists(paste0(interfileFolder, '/plotdatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_TD.rds')) == F){
+  plotdatasum.TD <- list()
+  for (x in 1:length(sigedge.all)){
+    modobj <- gammod.TD[[x]]
+    plotdata<- plotdata_generate(modobj, "SCdata.sum75.merge.ADHDTD", "age", agevector)
+    plotdata$SC_label <- names(plotdata)[13]
+    plotdata[,13] <- NULL
+    plotdatasum.TD[[x]] <- plotdata
+  }
+  
+  plotdatasum.TD.df <- do.call(rbind, lapply(plotdatasum.TD, function(x) data.frame(x)))
+  saveRDS(plotdatasum.TD.df, paste0(interfileFolder, '/plotdatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_TD.rds'))
+}else{
+  plotdatasum.TD.df <- readRDS(paste0(interfileFolder, '/plotdatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_TD.rds'))
+}
+
+## Derivative data
+agevector <- seq(min(SCdata.sum75.merge.ADHDTD$age), max(SCdata.sum75.merge.ADHDTD$age), length.out=1000)
+
+# ADHD
+if (file.exists(paste0(interfileFolder, '/derivativedatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_ADHD.rds')) == F){
+  derivdatasum.ADHD <- list()
+  for (x in 1:length(dependent.var)){
+    modobj <- gammod.ADHD[[x]]
+    draws<-1
+    increments<-1000
+    derivdata<- gam.derivatives(modobj, "age", agevector, draws, increments, return_posterior_derivatives = FALSE)
+    derivdata$label_ID<-dependent.var[x]
+    derivdatasum.ADHD[[x]] <- derivdata
+  }
+  
+  derivdatasum.ADHD.df <- do.call(rbind, lapply(derivdatasum.ADHD, function(x) data.frame(x)))
+  saveRDS(derivdatasum.ADHD.df, paste0(interfileFolder, '/derivativedatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_ADHD.rds'))
+}else{
+  derivdatasum.ADHD.df <- readRDS(paste0(interfileFolder, '/derivativedatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_ADHD.rds'))
+}
+
+# TD
+if (file.exists(paste0(interfileFolder, '/derivativedatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_TD.rds')) == F){
+  derivdatasum.TD <- list()
+  for (x in 1:length(sigedge.all)){
+    modobj <- gammod.TD[[x]]
+    draws<-1
+    increments<-1000
+    derivdata<- gam.derivatives(modobj, "age", agevector, draws, increments, return_posterior_derivatives = FALSE)
+    derivdata$label_ID<-dependent.var[x]
+    derivdatasum.TD[[x]] <- derivdata
+  }
+  
+  derivdatasum.TD.df <- do.call(rbind, lapply(derivdatasum.TD, function(x) data.frame(x)))
+  saveRDS(derivdatasum.TD.df, paste0(interfileFolder, '/derivativedatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_TD.rds'))
+}else{
+  derivdatasum.TD.df <- readRDS(paste0(interfileFolder, '/derivativedatasum.df_Yeo', Yeoresolution, '_sumSCinvnode_CV75_TD.rds'))
+}
+
+## Figure out
+rand.df <- data.frame(rand = rnorm(element_num, 0, 1))
+Yeo_10 <- SCrankcorr(rand.df, "rand", Yeoresolution.delLM, T)
+Yeo_10$SClabel <- paste0("SC.", 1:element_num)
+for (x in 1:length(sigedge.all)){
+  region<-sigedge.all[x]
+  if (str_detect(gamresultsum.df.ADHD$parcel[x], "SC.")){
+    label <- gsub("_deviationZ", "", region)
+    SCrank.tmp <- Yeo_10$SCrank[Yeo_10$SClabel==label]
+    gamresultsum.df.ADHD.SC$SCrank[x] <- SCrank.tmp
+    }
+  
+  
+  data.ADHD <- plotdatasum.ADHD.df %>% filter(SC_label==region)
+  data.ADHD$diagnosis <- "ADHD"
+  data.TD <- plotdatasum.TD.df %>% filter(SC_label==region)
+  data.TD$diagnosis <- "TD"
+  
+  data.tmp <- rbind(data.ADHD, data.TD)
+  data.tmp$diagnosis <- factor(data.tmp$diagnosis, levels=c("TD", "ADHD"))
+  # scatter plot
+  scatterFig <- ggplot(data=data.ADHD)+
+    geom_ribbon(aes(x=age, ymin=selo, ymax=sehi), fill="#810F7C", alpha=0.3)+
+    geom_line(aes(x=age, y=fit), linewidth=1)+
+    # scale_color_manual(values = c("black", "#810F7C"))+
+    # scale_fill_manual(values = c("black", "#810F7C"))+
+    scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    labs(x=NULL, y="Deviation from reference")+
+    theme_classic()+
+    theme(axis.text.y=element_text(size=24, color="black"), 
+          axis.text.x = element_blank(),    # 隐藏标签
+          axis.ticks.x = element_blank(),
+          axis.title =element_text(size=24, color="black"),aspect.ratio = 1.1,
+          plot.title = element_text(size=20.5, hjust=0.5, color="black"),
+          plot.background=element_rect(fill="transparent"),
+          panel.background=element_rect(fill="transparent"),
+          legend.position = 'none')
+  
+  deriTD <- derivdatasum.TD.df %>% filter(label_ID == region)
+  deriADHD <- derivdatasum.ADHD.df %>% filter(label_ID == region)
+  deriTD$significant.derivative[deriTD$significant==F] <- NA
+  deriADHD$significant.derivative[deriADHD$significant==F] <- NA
+  
+  deriTD$h <- deriADHD$h <- 1
+  linerange_frame<-data.frame(x=c(min(deriADHD$age),max(deriADHD$age)), ymin =rep(0, times=2), ymax =rep(1, times=2),y=c(0, 1), xmin=rep(min(deriADHD$age), times=2), xmax=rep(max(deriADHD$age), times=2))
+  maxth <- max(abs(c(deriTD$significant.derivative, deriADHD$significant.derivative)), na.rm = T)
+  minth <- min(c(deriTD$significant.derivative, deriADHD$significant.derivative), na.rm = T)
+  # TD derivative
+  derivplot.TD <-ggplot(data=deriTD)+
+    geom_bar(aes(x=age, y=1, fill = significant.derivative, color=significant.derivative),stat = "identity", position = "stack")+
+    geom_linerange(data=linerange_frame, aes(y=y, xmin =xmin, xmax =xmax), color="black", linewidth=0.5)+
+    geom_linerange(data=linerange_frame, aes(x=x, ymin =ymin, ymax =ymax), color="black", linewidth=0.5)+
+    scale_color_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_fill_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_y_continuous(breaks = 0.5, labels="TD")+
+    ylab(NULL)+xlab(NULL)+
+    scale_x_continuous(breaks = NULL)+
+    theme_classic()+
+    theme(axis.text=element_text(size=24, color='black'),
+          axis.title = element_text(size = 24),
+          axis.line.y=element_blank(),
+          axis.line.x=element_blank(),aspect.ratio = 0.05,
+          axis.ticks.y = element_blank(),
+          legend.position = 'none')
+  # ADHD derivative
+  derivplot.ADHD <-ggplot(data=deriADHD)+
+    geom_bar(aes(x=age, y=1, fill = significant.derivative, color=significant.derivative),stat = "identity", position = "stack")+
+    geom_linerange(data=linerange_frame, aes(y=y, xmin =xmin, xmax =xmax), color="black", linewidth=0.5)+
+    geom_linerange(data=linerange_frame, aes(x=x, ymin =ymin, ymax =ymax), color="black", linewidth=0.5)+
+    scale_color_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_fill_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_y_continuous(breaks =NULL)+
+    ylab(NULL)+xlab("Age (years)")+
+    #scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    theme_classic()+
+    theme(axis.text=element_text(size=24, color='black'),
+          axis.title = element_text(size = 24),
+          axis.line.y=element_blank(),
+          axis.line.x=element_blank(),aspect.ratio = 0.05,
+          axis.ticks.y = element_blank(),
+          legend.position = 'none')
+  
+  combined_plot <- scatterFig / derivplot.ADHD + plot_layout(ncol=1, nrow=2)
+  print(combined_plot)
+  
+  #print(scatterFig)
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Deviationcompare/DeviationChange/", region, "_noPoint.tiff"),combined_plot, width=13, height = 13, units = "cm")
+  
+  # Point
+  SCdata.sum75.merge.ADHDTD$Deviation <- SCdata.sum75.merge.ADHDTD[[region]]
+  PointFig <- ggplot(data=data.tmp)+
+    geom_point(data=SCdata.sum75.merge.ADHDTD, aes(x=age, y=Deviation, color=diagnosis), alpha=0.3)+
+    geom_ribbon(aes(x=age, ymin=selo, ymax=sehi, fill=diagnosis), alpha=0.3)+
+    geom_line(aes(x=age, y=fit, linetype=diagnosis), linewidth=1)+
+    scale_color_manual(values = c("#4393c3", "#d6604d"))+
+    scale_fill_manual(values = c("#4393c3", "#d6604d"))+
+    scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    labs(x="Age (years)", y=region, color="Diagnosis", fill="Diagnosis", linetype="Diagnosis")+
+    theme_classic()+
+    theme(axis.text=element_text(size=20.5, color="black"), 
+        axis.title =element_text(size=20.5, color="black"),aspect.ratio = 0.5,
+        plot.title = element_text(size=20.5, hjust=0.5, color="black"),
+        plot.background=element_rect(fill="transparent"),
+        panel.background=element_rect(fill="transparent"),
+        legend.text = element_text(size=15, color="black"),
+        legend.title = element_text(size=15, color="black"))
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Deviationcompare/DeviationChange/", region, "_Point.tiff"), PointFig, width=18, height = 11, units = "cm")
+  
+  # Within ADHD
+  SCdata.ADHD$Deviation <- SCdata.ADHD[[region]]
+  if (str_detect(gamresultsum.df.ADHD$parcel[x], "SC.")){
+    subtitle <- bquote(
+        italic('F') == .(round(gamresultsum.df.ADHD.SC$gam.smooth.F[x], 2)) * "," ~ 
+          italic(P) == .(round(gamresultsum.df.ADHD.SC$anova.smooth.p.fdr[x], 3))
+      )
+    title=paste0("Rank=", SCrank.tmp)
+    
+  }else{
+    subtitle <- bquote(
+        italic('F') == .(round(gamresultsum.df.ADHD$gam.smooth.F[x], 2)) * "," ~ 
+          italic(P) == .(round(gamresultsum.df.ADHD$anova.smooth.p.fdr[x], 3))
+      )
+    title=NULL
+  }
+  
+  PointFig <- ggplot(data=data.ADHD)+
+    geom_point(data=SCdata.ADHD, aes(x=age, y=Deviation), color= "#810F7C", alpha=0.3)+
+    geom_ribbon(aes(x=age, ymin=selo, ymax=sehi), fill="#810F7C", alpha=0.3)+
+    geom_line(aes(x=age, y=fit), linewidth=1)+
+    scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    labs(x=NULL, y=label, title=title)+
+    theme_classic()+
+    theme(axis.text.y=element_text(size=21, color="black"), 
+          axis.text.x = element_blank(),    # 隐藏标签
+          axis.ticks.x = element_blank(),
+          axis.title =element_text(size=21, color="black"),aspect.ratio = 0.8,
+          plot.subtitle = element_text(size=21, hjust=0.1, vjust=-5, color="black"),
+          plot.background=element_rect(fill="transparent"),
+          panel.background=element_rect(fill="transparent"),
+          legend.position = 'none')
+  
+  derivplot.ADHD <-ggplot(data=deriADHD)+
+    geom_bar(aes(x=age, y=1, fill = significant.derivative, color=significant.derivative),stat = "identity", position = "stack")+
+    geom_linerange(data=linerange_frame, aes(y=y, xmin =xmin, xmax =xmax), color="black", linewidth=0.5)+
+    geom_linerange(data=linerange_frame, aes(x=x, ymin =ymin, ymax =ymax), color="black", linewidth=0.5)+
+    scale_color_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_fill_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_y_continuous(breaks = 0.5, labels=NULL)+
+    ylab(NULL)+xlab("Age (years)")+
+    #scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    theme_classic()+
+    theme(axis.text=element_text(size=21, color='black'),
+          axis.title = element_text(size = 21),
+          axis.line.y=element_blank(),
+          axis.line.x=element_blank(),aspect.ratio = 0.05,
+          axis.ticks.y = element_blank(),
+          legend.position = 'none')
+  combined_plot <- PointFig / derivplot.ADHD + plot_layout(ncol=1, nrow=2)
+  print(combined_plot)
+  
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Deviationcompare/DeviationChange/ADHD_", region, "_Point.tiff"), combined_plot, width=14.5, height = 12.5, units = "cm")
+  
+  
+}
+
+# Symptoms
+gamresultsum.df.ADHD.symp$anova.smooth.p.fdr <- p.adjust(gamresultsum.df.ADHD.symp$anova.smooth.pvalue, method = "fdr")
+for (x in 10:length(dependent.var)){
+  region<-dependent.var[x]
+
+  data.ADHD <- plotdatasum.ADHD.df %>% filter(SC_label==region)
+  data.ADHD$diagnosis <- "ADHD"
+  
+  # scatter plot
+  scatterFig <- ggplot(data=data.ADHD)+
+    geom_ribbon(aes(x=age, ymin=selo, ymax=sehi), fill="#810F7C", alpha=0.3)+
+    geom_line(aes(x=age, y=fit), linewidth=1)+
+    # scale_color_manual(values = c("black", "#810F7C"))+
+    # scale_fill_manual(values = c("black", "#810F7C"))+
+    scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    labs(x=NULL, y=region)+
+    theme_classic()+
+    theme(axis.text.y=element_text(size=24, color="black"), 
+          axis.text.x = element_blank(),    # 隐藏标签
+          axis.ticks.x = element_blank(),
+          axis.title =element_text(size=24, color="black"),aspect.ratio = 1.1,
+          plot.title = element_text(size=20.5, hjust=0.5, color="black"),
+          plot.background=element_rect(fill="transparent"),
+          panel.background=element_rect(fill="transparent"),
+          legend.position = 'none')
+  
+  deriADHD <- derivdatasum.ADHD.df %>% filter(label_ID == region)
+  deriADHD$significant.derivative[deriADHD$significant==F] <- NA
+  
+  deriADHD$h <- 1
+  linerange_frame<-data.frame(x=c(min(deriADHD$age),max(deriADHD$age)), ymin =rep(0, times=2), ymax =rep(1, times=2),y=c(0, 1), xmin=rep(min(deriADHD$age), times=2), xmax=rep(max(deriADHD$age), times=2))
+  maxth <- max(abs(deriADHD$significant.derivative), na.rm = T)
+  minth <- min(deriADHD$significant.derivative, na.rm = T)
+  
+  # ADHD derivative
+  derivplot.ADHD <-ggplot(data=deriADHD)+
+    geom_bar(aes(x=age, y=1, fill = significant.derivative, color=significant.derivative),stat = "identity", position = "stack")+
+    geom_linerange(data=linerange_frame, aes(y=y, xmin =xmin, xmax =xmax), color="black", linewidth=0.5)+
+    geom_linerange(data=linerange_frame, aes(x=x, ymin =ymin, ymax =ymax), color="black", linewidth=0.5)+
+    scale_color_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_fill_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_y_continuous(breaks =NULL)+
+    ylab(NULL)+xlab("Age (years)")+
+    #scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    theme_classic()+
+    theme(axis.text=element_text(size=24, color='black'),
+          axis.title = element_text(size = 24),
+          axis.line.y=element_blank(),
+          axis.line.x=element_blank(),aspect.ratio = 0.05,
+          axis.ticks.y = element_blank(),
+          legend.position = 'none')
+  
+  combined_plot <- scatterFig / derivplot.ADHD + plot_layout(ncol=1, nrow=2)
+  print(combined_plot)
+  
+  #print(scatterFig)
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Deviationcompare/DeviationChange/", region, "_noPoint.tiff"),combined_plot, width=13, height = 13, units = "cm")
+  
+  # Within ADHD
+  SCdata.ADHD$Deviation <- SCdata.ADHD[[region]]
+  if (str_detect(gamresultsum.df.ADHD$parcel[x], "SC.")){
+    subtitle <- bquote(
+        italic('F') == .(round(gamresultsum.df.ADHD.symp$gam.smooth.F[n], 2)) * "," ~ 
+          italic(P) == .(round(gamresultsum.df.ADHD.symp$anova.smooth.p.fdr[n], 3))
+      )
+    title=paste0("Rank=", SCrank.tmp)
+    
+  }else{
+    subtitle <- bquote(
+        italic('F') == .(round(gamresultsum.df.ADHD.symp$gam.smooth.F[(x - 9)], 2)) * "," ~ 
+          italic(P) == .(round(gamresultsum.df.ADHD.symp$anova.smooth.p.fdr[(x - 9)], 3))
+      )
+    title=NULL
+  }
+  
+  PointFig <- ggplot(data=data.ADHD)+
+    geom_point(data=SCdata.ADHD, aes(x=age, y=Deviation), color= "#810F7C", alpha=0.3)+
+    geom_ribbon(aes(x=age, ymin=selo, ymax=sehi), fill="#810F7C", alpha=0.3)+
+    geom_line(aes(x=age, y=fit), linewidth=1)+
+    scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    labs(x=NULL, y=region, title=title)+
+    theme_classic()+
+    theme(axis.text.y=element_text(size=21, color="black"), 
+          axis.text.x = element_blank(),    # 隐藏标签
+          axis.ticks.x = element_blank(),
+          axis.title =element_text(size=21, color="black"),aspect.ratio = 0.8,
+          plot.subtitle = element_text(size=21, hjust=0.1, vjust=-5, color="black"),
+          plot.background=element_rect(fill="transparent"),
+          panel.background=element_rect(fill="transparent"),
+          legend.position = 'none')
+  
+  derivplot.ADHD <-ggplot(data=deriADHD)+
+    geom_bar(aes(x=age, y=1, fill = significant.derivative, color=significant.derivative),stat = "identity", position = "stack")+
+    geom_linerange(data=linerange_frame, aes(y=y, xmin =xmin, xmax =xmax), color="black", linewidth=0.5)+
+    geom_linerange(data=linerange_frame, aes(x=x, ymin =ymin, ymax =ymax), color="black", linewidth=0.5)+
+    scale_color_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_fill_distiller(type="seq", palette = "RdBu",limit=c(-maxth, maxth),na.value="white", direction = -1)+
+    scale_y_continuous(breaks = 0.5, labels=NULL)+
+    ylab(NULL)+xlab("Age (years)")+
+    #scale_x_continuous(breaks = c(9, 11, 13, 15))+
+    theme_classic()+
+    theme(axis.text=element_text(size=21, color='black'),
+          axis.title = element_text(size = 21),
+          axis.line.y=element_blank(),
+          axis.line.x=element_blank(),aspect.ratio = 0.05,
+          axis.ticks.y = element_blank(),
+          legend.position = 'none')
+  combined_plot <- PointFig / derivplot.ADHD + plot_layout(ncol=1, nrow=2)
+  print(combined_plot)
+  
+  ggsave(paste0(FigureFolder, "/SCstrength_Age/Deviationcompare/DeviationChange/ADHD_", region, "_Point.tiff"), combined_plot, width=14.5, height = 12.5, units = "cm")
+  
+  
+}
+
+
+
+
+
+gamresultsum.df.ADHD.symp <- gamresultsum.df.ADHD.symp %>% filter(parcel %in% c("cbcl_scr_syn_external_t", "cbcl_scr_dsm5_adhd_t", "cbcl_scr_syn_attention_t"))
+gamresultsum.df.ADHD.symp$bootstrap_p.fdr <- p.adjust(gamresultsum.df.ADHD.symp$bootstrap_pvalue, method = "fdr")
+
+write.csv(gamresultsum.df.ADHD.symp, paste0(resultFolder, "/SymptomChange_gamresults_ADHD.csv"), row.names = F)
+write.csv(gamresultsum.df.ADHD.SC, paste0(resultFolder, "/SCDeviationChange_gamresults_ADHD.csv"), row.names = F)
+write.csv(gamresultsum.df.TD.SC, paste0(resultFolder, "/SCDeviationChange_gamresults_TD.csv"), row.names = F)
+
+```
+
+
+
+
+

@@ -1,0 +1,166 @@
+---
+title: "CCNP_exclusion_demo"
+author: "Xiaoyu Xu"
+date: "2024-11-14"
+modified: "2025-07-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list = ls())
+library(tidyverse)
+library(psych)
+library(MplusAutomation)
+library(openxlsx)
+library(rjson)
+home_path <- "D:/code/SC_ADHD/datasets/CCNP"
+result_path <- file.path(home_path, "demography")
+demo_path <- home_path
+qcpath <- file.path(home_path, "qc_json")
+
+basic_demo <- read.csv(paste0(demo_path, "/PEK_Participant.csv"))
+basic_demo <- basic_demo %>% filter(!is.na(Sex))
+basic_demo$subID <- paste0("sub-CCNPPEK", str_pad(basic_demo$Participant, width = 4, pad = "0"))
+basic_demo$ses <- paste0("ses-", str_pad(basic_demo$Session, width = 2, pad = "0"))
+basic_demo$scanID <- paste0(basic_demo$subID, "_", basic_demo$ses)
+allnum <- nrow(basic_demo)
+
+```
+filter scanID without sex
+399 scan ID
+
+### 1) MRI file list
+```{r MRIfile}
+print(paste(allnum, "scans in total."))
+MRIfilelist_PEK <- read.table(paste0(demo_path, "/MRIfilelist_PEK.txt"), sep = "/")
+MRIfilelist_PEK$scanID <- paste0(MRIfilelist_PEK$V8, "_", MRIfilelist_PEK$V9)
+MRIfilelist_PEK_wide <- MRIfilelist_PEK %>% pivot_wider(names_from=V10, values_from = V11) %>% select(scanID, anat, dwi)
+
+MRIfilelist_PEK_wide_exclude <- MRIfilelist_PEK_wide %>% filter(
+  anat=="NULL" | dwi=="NULL"
+)
+
+basic_demo <- basic_demo %>% filter(! scanID %in% MRIfilelist_PEK_wide_exclude$scanID)
+allnum2 <- nrow(basic_demo)
+
+print(paste((allnum-allnum2), "participants were excluded due to missing T1 or dwi.", allnum2, "scans left."))
+
+```
+
+
+
+### 2) Inclusion & exclusion criteria of CCNP
+The inclusion criteria were as follows:
+• Male or female native Chinese speakers aged 6.0–17.9 years at enrolment. Note that some participants under 6 years old
+  were also enrolled as a preexperiment on younger individuals.
+• Must have the capacity to provide assent, guardian must have the capacity to sign informed consent.
+The exclusion criteria were as follows:
+• Guardians unable to provide developmental and/or biological family histories (e.g., some instances of adoption).
+• Serious neurological (specific or focal) disorders.
+• History of significant traumatic brain injury.
+• History or family history (first-degree relatives) of neuropsychiatric disorders, such as ASD, ADHD, bipolar disorder, or schizophrenia.
+• Contraindication for MRI scanning, such as metal implants, or pacemakers
+
+
+### 3) Additional exclusion criteria
+Intellectual disability
+
+```{r IQ}
+CCNPPEK_IQ <- read.xlsx(paste0(demo_path, "/CCNPPEK_IQ.xlsx"))
+CCNPPEK_IQ_Adult <- read.xlsx(paste0(demo_path, "/CCNPPEK_IQ_Adult.xlsx"))
+CCNPPEK_IQ_Preschool <- read.xlsx(paste0(demo_path, "/CCNPPEK_IQ_Preschool.xlsx"))
+
+CCNPPEK_IQ$scanID <- paste0("sub-CCNPPEK", CCNPPEK_IQ$Participant, "_ses-", CCNPPEK_IQ$Session)
+CCNPPEK_IQ_Adult$scanID <- paste0("sub-CCNPPEK", CCNPPEK_IQ_Adult$Participant, "_ses-", CCNPPEK_IQ_Adult$Session)
+CCNPPEK_IQ_Preschool$scanID <- paste0("sub-CCNPPEK", CCNPPEK_IQ_Preschool$Participant, "_ses-", CCNPPEK_IQ_Preschool$Session)
+
+CCNPPEK_IQ$FSIQ <- as.numeric(CCNPPEK_IQ$FSIQ)
+CCNPPEK_IQ_Adult$FSIQ <- as.numeric(CCNPPEK_IQ_Adult$FSIQ)
+CCNPPEK_IQ_Preschool$FSIQ <- as.numeric(CCNPPEK_IQ_Preschool$FSIQ)
+
+CCNPPEK_IQ_exclude <- CCNPPEK_IQ %>% filter(FSIQ < 70)
+CCNPPEK_IQ_Adult_exclude <- CCNPPEK_IQ_Adult %>% filter(FSIQ < 70)
+CCNPPEK_IQ_Preschool_exclude <- CCNPPEK_IQ_Preschool %>% filter(FSIQ < 70)
+
+basic_demo <- basic_demo %>% filter(! scanID %in% c(CCNPPEK_IQ_exclude$scanID))
+allnum3 <- nrow(basic_demo)
+
+print(paste((allnum2-allnum3), "scans were excluded due to intellectual disability.", allnum3, "scans left."))
+
+```
+
+### 3) Missing sex & age
+```{r age_sex}
+basic_demo <- basic_demo %>% drop_na(Sex, ScanAge)
+basic_demo <- basic_demo %>% filter(ScanAge >= 6.5)
+allnum4 <- nrow(basic_demo)
+
+print(paste((allnum3-allnum4), "participants were excluded due to missing age or sex information.", allnum4, "scans left."))
+```
+
+### 5) mean_fd
+
+```{r dMRIQC}
+for (i in 1:nrow(basic_demo)){
+  scanID = basic_demo$scanID[i]
+  json_path <- paste0(qcpath, "/", scanID, ".json")
+  
+  if (file.exists(json_path)){
+    qcjson <- rjson::fromJSON(file=json_path)
+    basic_demo$mean_fd[i] <- qcjson$subjects[[1]]$mean_fd
+  }else{
+    basic_demo$mean_fd[i] <- NA
+  }
+}
+
+basic_demo <- basic_demo %>% drop_na(mean_fd) %>% filter(mean_fd < 0.6021+3*0.4296395)
+
+allnum5 <- nrow(basic_demo)
+
+print(paste((allnum4-allnum5), "scans were excluded due to failing preprocessing or excessive head motion.", allnum5, "scans left."))
+
+basic_demo <- basic_demo %>% filter(! scanID %in% c("sub-CCNPPEK0058_ses-01", "sub-CCNPPEK0059_ses-01"))
+allnum6 <- nrow(basic_demo)
+print(paste((allnum5-allnum6), "scans were excluded due to failing reconstruction.", allnum6, "scans left."))
+
+```
+
+
+
+### Merge CBCL & re-encode handedness factors
+
+```{r EHI_CBCL}
+# handedness
+basic_demo <- basic_demo %>% mutate(
+  handedness = case_when(
+    str_detect(Handness_ChineseEHI, "L") ~ "left",
+    str_detect(Handness_ChineseEHI, "R") ~ "right",
+    Handness_ChineseEHI == "M" ~ "mixed",
+    .default = NA
+  )
+)
+
+# CBCL
+CCNPPEK_CBCL <- read.xlsx(paste0(demo_path, "/CCNPPEK_CBCL.xlsx"))
+CCNPPEK_CBCL$scanID <- paste0("sub-CCNPPEK", CCNPPEK_CBCL$Participant, "_ses-", CCNPPEK_CBCL$Session)
+basic_demo <- basic_demo %>% left_join(select(CCNPPEK_CBCL, scanID, starts_with("Total_Problems")), by="scanID")
+
+
+```
+
+
+### Merge ICV
+
+```{r ICV}
+ICV_CCNP <- read.csv("D:/xuxiaoyu/open_dataset_information/CCNP/devCCNP/ICV_CCNP.txt")
+ICV_CCNP$X <- NULL
+basic_demo <- merge(basic_demo, ICV_CCNP, by.x = "scanID", by.y="subID_ses", all.x = T)
+write.csv(basic_demo, paste0(result_path, "/basic_demo_devCCNPPEK.csv"), row.names = F)
+
+```
+
+
+
+
+
