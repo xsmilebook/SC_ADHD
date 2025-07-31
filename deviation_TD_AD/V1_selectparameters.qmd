@@ -1,0 +1,344 @@
+---
+title: "S1_selectparameters"
+format: html
+editor: visual
+author: Xiaoyu Xu
+date: 1/22/2025
+---
+
+```{r}
+#| label: load-packages-data
+#| include: false
+library(ggplot2)
+library(tidyverse)
+library(mgcv)
+library(readxl)
+library(openxlsx)
+library(parallel)
+library(gamlss)
+library(scales)
+rm(list=ls())
+
+element_num <- 252
+
+
+# input directory
+homepath <- "D:/code/SC_ADHD"
+
+interfileFolder <- file.path(homepath, "datasets", "interfileFolder", "TD_ADHD_deviation")
+functionFolder <- file.path(homepath, "code", "functions")
+resultFolder <- file.path(homepath, "datasets", "results", "TD_ADHD_deviation")
+functionFolder.SCDev <- file.path(homepath, "functionFolder.SCDev", "gamfunction")
+FigureFolder <- file.path(homepath, "Figures", "TD_ADHD_deviation")
+
+# load data
+SC_labels <- readLines(file.path(interfileFolder, "roi.txt"), ok = TRUE, skipNul = FALSE)
+
+
+SCdata.train <- read.csv(file.path(interfileFolder, "df_tr.csv"))
+SCdata.test <- read.csv(file.path(interfileFolder, "df_te.csv"))
+
+
+
+source(paste0(functionFolder, "/Compare_distributions_gamlss.R"))
+
+```
+
+## Step 1 Prepare data
+
+1)  filter TD participants, diagnosed as TD and not diagnosed as ADHD at any visit.
+
+```{r}
+#| label: Step1.1
+
+SCdata.train$sex <- factor(SCdata.train$sex)
+SCdata.test$sex <- factor(SCdata.test$sex)
+
+all_site_levels <- unique(c(as.character(SCdata.train$site), as.character(SCdata.test$site)))
+
+SCdata.train$site <- factor(SCdata.train$site, levels = all_site_levels)
+SCdata.test$site <- factor(SCdata.test$site, levels = all_site_levels)
+
+
+```
+
+2)  separate TD set as training (70%) & test (30%) sets. This proportion is based on [Rutherford, Nature Protocol, 2023](https://www.nature.com/articles/s41596-022-00696-5)
+
+```{r}
+#| label: Step1.2
+## Separate training and test dataset. 
+##########################################
+# First, TD dataset was separated into two subsets, one consists of subjects with only one visit, the other 
+# one consists of subjects with over one visits.
+# Then, stratified sampling was conducted in the two subsets separately to generate 70% training samples and 30% test samples. 
+# The unique subset was stratified by sex, siteID and eventname, while the longitudinal subset was stratified by sex and siteID.
+# Rutherford, Nature Protocol,2023
+subject_list <- SCdata.TD %>%
+  group_by(scanID) %>%
+  summarise(
+    siteID = first(siteID), # Get the site for each subject
+    sex = first(sex)       # Get the sex for each subject
+  ) %>%
+  ungroup()
+
+# Create a stratification variable
+subject_list$site_sex <- paste0(subject_list$siteID, "_", subject_list$sex)
+
+# 2. Perform stratified sampling on the subject list
+set.seed(3407) # Use the same random seed for reproducibility
+stratify_var <- subject_list$site_sex
+split_indices <- split(1:nrow(subject_list), stratify_var)
+# 按照site_sex分层抽样
+
+# Sample 70% of subjects from each stratum for the training set
+train_indices <- lapply(split_indices, function(indices) {
+  sample(x = indices, size = round(length(indices) * 0.7), replace = FALSE)
+})
+
+# Combine the indices to get the list of training subjects
+train_subject_indices <- unlist(train_indices)
+train_subjects <- subject_list$scanID[train_subject_indices]
+
+# 3. Create the training and test sets based on the sampled subject IDs
+SCdata.TD.trainset <- SCdata.TD %>%
+  filter(scanID %in% train_subjects)
+
+SCdata.TD.testset <- SCdata.TD %>%
+  filter(!(scanID %in% train_subjects))
+
+# 4. Final cleaning and reporting (same as original code)
+SCdata.TD.trainset <- SCdata.TD.trainset %>%
+  group_by(siteID) %>%
+  filter(n() > 30) %>%
+  ungroup()
+
+
+print(paste(nrow(SCdata.TD.trainset), "obs in the training set,", nrow(SCdata.TD.testset), "obs in the test set."))
+print(paste("Number of unique subjects in training set:", length(unique(SCdata.TD.trainset$scanID))))
+print(paste("Number of unique subjects in test set:", length(unique(SCdata.TD.testset$scanID))))
+##########################################
+
+# The rest of the code block remains the same
+SCdata.TD.trainset[,c("siteID", "sex")] <- lapply(SCdata.TD.trainset[,c("siteID", "sex")], as.factor)
+SCdata.TD.testset[,c("siteID", "sex")] <- lapply(SCdata.TD.testset[,c("siteID", "sex")], as.factor)
+
+# Assuming WB_SCmean and SC.* columns are present from Step 1.1
+# Ensure your element_num matches the number of SC columns
+element_num <- 120 # You set this to 15*(15+1)/2 = 120 earlier, which is correct.
+
+SCdata.TD.trainset_noNA <- SCdata.TD.trainset %>%
+  drop_na(c(paste0("SC.", 1:element_num), "age", "sex", "siteID", "mean_fd"))
+
+SCdata.TD.testset_noNA <- SCdata.TD.testset %>%
+  drop_na(c(paste0("SC.", 1:element_num), "age", "sex", "siteID", "mean_fd"))
+
+# Save the datasets
+saveRDS(SCdata.TD.trainset_noNA, paste0(resultFolder, "/SCdata.TD.trainset_SCYeo", element_num, ".rds"))
+saveRDS(SCdata.TD.testset_noNA, paste0(resultFolder, "/SCdata.TD.testset_SCYeo", element_num, ".rds"))
+
+```
+
+## Step 2 Select parameters
+
+### 2.1 Select distribution families.
+
+We are going to select the best distribution from 24 continuous distributions.
+
+```{r}
+#| label: Step2.1
+
+num_cores <- detectCores() - 8
+cl <- makeCluster(num_cores)
+clusterExport(cl, varlist = c("functionFolder"), envir = .GlobalEnv)
+invisible(clusterEvalQ(cl, {
+  library(ggplot2)
+  library(tidyverse)
+  library(mgcv)
+  library(readxl)
+  library(openxlsx)
+  library(parallel)
+  library(gamlss)
+  library(scales)
+  source(paste0(functionFolder, "/Compare_distributions_gamlss.R"))
+}))
+
+dataname <- "SCdata.train"
+smoothvar <- "age"
+IDvar <- "sub_id"
+bs.df = 3
+covariates <- "sex+mean_fd+TBV+network_strength_schaefer200"
+randomvar="site"
+
+## All edges
+if (! file.exists(paste0(resultFolder, "/distributiontest_TD_Edgelevel.rds"))){
+  performancelist <- list()
+  for (i in 1:element_num){
+    dependentvar <- SC_labels[i]
+    outlist.tmp <- gamlss_comparedistribution(dataname, dependentvar, smoothvar,IDvar, bs.df, covariates, randomvar, cl)
+    performance.tmp <- outlist.tmp$performance
+    performancelist[[i]] <- outlist.tmp$performance
+  }
+  saveRDS(performancelist, paste0(resultFolder, "/distributiontest_TD_Edgelevel.rds"))
+}else{
+  performancelist <- readRDS(paste0(resultFolder, "/distributiontest_TD_Edgelevel.rds"))
+}
+
+performance.df <- do.call(rbind, performancelist)
+performance.df <- performance.df %>% group_by(dependentvar) %>%
+  mutate(family = performancelist[[1]]$distribution)
+# performance.df <- performance.df %>% filter(converged==T) %>% group_by(family) %>% filter(n() == 120)
+performance.df <- performance.df %>% group_by(dependentvar) %>%
+  mutate(rankorder = rank(BIC))
+
+performance.df.sum <- performance.df %>% group_by(family) %>% 
+  summarise(meanBICR = mean(rankorder), bestnum = sum(rankorder==1))
+print(paste(performance.df.sum$family[which.max(performance.df.sum$bestnum)], "is selected as it is the best family for most edges."))
+
+# plot
+
+# All edges
+performance.df.sum$family <- factor(performance.df.sum$family, levels = performance.df.sum$family[order(performance.df.sum$bestnum, decreasing = T)])
+ggplot(data=performance.df.sum)+
+  geom_bar(aes(x=family, y=bestnum),stat="identity", fill="#B4D3E7")+
+  labs(x="Distribution family", y="Frequency")+theme_classic()+
+  theme(panel.background = element_rect(fill="white"),
+        plot.background = element_rect(fill = "white",colour = NA),aspect.ratio = 0.7,
+        plot.title = element_text(color = "black", size = 14, hjust = 0.5),
+        axis.title = element_text(color = "black", size = 14),axis.line = element_line(linewidth = 0.4),
+        axis.ticks = element_line(linewidth = 0.4),
+        axis.text.y = element_text(color = "black",size = 14),
+        axis.text.x = element_text(color = "black",angle = 45, hjust = 1, size = 14),
+        legend.position = "none")
+
+ggsave(paste0(FigureFolder, "/distribution_AlledgesSC.tiff"), width=12, height=10, units = "cm")
+ggsave(paste0(FigureFolder, "/distribution_AlledgesSC.svg"), width=12, height=10, units = "cm")
+
+```
+
+### 2.2 Select degree of freedom
+
+we are going to select the best degree of freedom from 2 to 6.
+
+```         
+```
+
+```{r}
+#| label: Step2.2
+source(paste0(functionFolder, "/Compare_distributions_gamlss.R"))
+bs.df.set <- matrix(c(3,3,3,
+                   3,4,3,
+                   3,5,3,
+                   3,6,3,
+                   4,3,3,
+                   4,4,3,
+                   4,5,3,
+                   4,6,3,
+                   5,3,3,
+                   5,4,3,
+                   5,5,3,
+                   5,6,3,
+                   6,3,3,
+                   6,4,3,
+                   6,5,3,
+                   6,6,3,
+                   2,2,2,
+                   2,3,2,
+                   2,4,2,
+                   2,5,2,
+                   2,6,2,
+                   3,2,2,
+                   3,3,2,
+                   3,4,2,
+                   3,5,2,
+                   3,6,2,
+                   4,2,2,
+                   4,3,2,
+                   4,4,2,
+                   4,5,2,
+                   4,6,2,
+                   5,2,2,
+                   5,3,2,
+                   5,4,2,
+                   5,5,2,
+                   5,6,2,
+                   6,2,2,
+                   6,3,2,
+                   6,4,2,
+                   6,5,2,
+                   6,6,2),
+                 byrow=TRUE,ncol=3,dimnames=list(NULL,c("mu","sigma", "degree")))
+
+
+## All edges
+dataname <- "SCdata.train"
+
+smoothvar <- "age"
+IDvar <- "sub_id" 
+covariates <-  "sex+mean_fd+TBV+network_strength_schaefer200"
+distribution.fam <- "GG"
+randomvar <- "site"
+
+if (! file.exists(paste0(resultFolder, "/dftest_TD_Edgelevel_Schaefer200.rds"))){
+  performancelist <- list()
+  for (i in 1:element_num){
+    cat(paste("\n--- Now processing i =", i, ", dependentvar =", SC_labels[i], "---\n"))
+    dependentvar <- SC_labels[i]
+    
+    
+    outlist.tmp <- tryCatch({
+      gamlss_compare.bs.df(dataname, dependentvar, smoothvar, IDvar, bs.df.set, covariates, distribution.fam, randomvar, cl)
+    }, error = function(e) {
+    
+    cat("\n!!! AN ERROR OCCURRED at i =", i, "!!!\n")
+    print("Error message:")
+    print(e) 
+    return(list(status = "FAILED", error_message = e$message)) # 
+    
+  })
+    performance.tmp <- outlist.tmp$performance
+    performancelist[[i]] <- outlist.tmp$performance
+  }
+  saveRDS(performancelist, paste0(resultFolder, "/dftest_TD_Edgelevel_Schaefer200.rds"))
+}else{
+  performancelist <- readRDS(paste0(resultFolder, "/dftest_TD_Edgelevel_Schaefer200.rds"))
+  
+}
+
+
+
+performance.df <- do.call(rbind, performancelist)
+performance.df <- performance.df %>% group_by(dependentvar) %>%
+  mutate(dfset = paste0("mu", performancelist[[1]]$mu.df, "_sigma", performancelist[[1]]$sigma.df, "_degree",  performancelist[[1]]$degree))
+# performance.df <- performance.df %>% filter(converged==TRUE) %>% group_by(dfset) %>% filter(n() == 120)
+
+performance.df <- performance.df %>% group_by(dependentvar) %>%
+  mutate(rankorder = rank(BIC))
+
+performance.df.sum <- performance.df %>% group_by(dfset) %>% 
+  summarise(meanBICR = mean(rankorder), bestnum = sum(rankorder==1))
+print(paste(performance.df.sum$dfset[which.max(performance.df.sum$bestnum)], "is selected as it is the best family for most edges."))
+# "mu2_sigma2_degree2 is selected as it is the best family for most edges."
+
+# plot
+
+# All edges
+performance.df.sum$dfset <- factor(performance.df.sum$dfset, levels = performance.df.sum$dfset[order(performance.df.sum$bestnum, decreasing = T)])
+performance.df.sum <- performance.df.sum %>% filter(dfset %in% levels(performance.df.sum$dfset)[1:10])
+
+ggplot(data=performance.df.sum)+
+  geom_bar(aes(x=dfset, y=bestnum),stat="identity", fill="#B4D3E7")+
+  labs(x="Degree of freedom", y="Frequency")+theme_classic()+
+  theme(panel.background = element_rect(fill="white"),
+        plot.background = element_rect(fill = "white",colour = NA),aspect.ratio = 0.7,
+        plot.title = element_text(color = "black", size = 14, hjust = 0.5),
+        axis.title = element_text(color = "black", size = 14),axis.line = element_line(linewidth = 0.4),
+        axis.ticks = element_line(linewidth = 0.4),
+        axis.text.y = element_text(color = "black",size = 14),
+        axis.text.x = element_text(color = "black",angle = 45, hjust = 1, size = 14),
+        legend.position = "none")
+
+ggsave(paste0(FigureFolder, "/Selectparameter/dfset_AlledgesSC.tiff"), width=12, height=10, units = "cm")
+ggsave(paste0(FigureFolder, "/Selectparameter/dfset_AlledgesSC.svg"), width=12, height=10, units = "cm")
+
+
+```

@@ -6,7 +6,7 @@ library(stringr)
 library(readr)
 
 
-base_path <- "D:/code/R_projects/SC_ADHD/datasets"
+base_path <- "D:/code/SC_ADHD/datasets"
 
 
 # --- 1. EFNY data---
@@ -43,7 +43,7 @@ efny_final_df <- efny_final_df %>%
 
 
 efny_final_df <- efny_final_df %>% 
-  rename(ID = sub_id, age = 年龄, sex = 性别) %>%
+  dplyr::rename(ID = `sub_id`, age = `年龄`, sex = `性别`) %>%
   mutate(age = as.numeric(age)) 
 
 
@@ -74,7 +74,7 @@ combined_df <- bind_rows(
 
 combined_df$age = as.numeric(combined_df$`age(m)`) / 12
 combined_df <- combined_df %>% select(-`age(m)`, -`IA-3`, -`HI-3`, -`TO-3`)
-combined_df <- combined_df %>% rename(ID = id)
+combined_df <- combined_df %>% dplyr::rename(ID = id)
 
 # delete sub without age,sex
 combined_df <- combined_df %>% 
@@ -125,7 +125,7 @@ cat("PKU6 ICV NA number:", sum(is.na(pku6_final_df$ICV)), "\n")
 
 # --- 3. merge datasets ---
 efny_final_df <- efny_final_df %>%
-  rename(
+  dplyr::rename(
     subID = ID,
     mean_fd = FD
   )
@@ -192,6 +192,6 @@ rows_after_fd_filter <- nrow(all_sites_df)
 cat("删除", rows_after_age - rows_after_fd_filter, "行 (因FD为离群值). 最终剩余行数:", rows_after_fd_filter, "\n")
 
 
-output_path <- file.path(base_path, "THREE_SITES_basic_demo.csv")
+output_path <- file.path(base_path, "demography", "THREE_SITES_basic_demo.csv")
 write.csv(all_sites_df, output_path, row.names = FALSE, na = "") # 使用na=""将NA值写为空字符串
 

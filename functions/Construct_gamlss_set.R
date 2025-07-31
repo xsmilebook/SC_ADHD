@@ -3,7 +3,7 @@ library(tidyverse)
 library(gamlss)
 ## Function 1. construct GAMLSS & return model objects and performance.
 ## This function is used to fit a GAMLSS containing a smooth term.
-construct_gamlss <- function(dataname, dependentvar, smoothterm, covariates,randomvar=NA, mu.df, sigma.df,degree, distribution.fam,IDvar, quantile.vec, stratify=NULL){
+construct_gamlss <- function(dataname, dependentvar, smoothterm, covariates, randomvar=NA, mu.df, sigma.df, degree, distribution.fam, IDvar, quantile.vec, stratify=NULL, simple_mod=NULL){
   
   # get data
   gam.data <- get(dataname)
@@ -22,6 +22,7 @@ construct_gamlss <- function(dataname, dependentvar, smoothterm, covariates,rand
   con<-gamlss.control(n.cyc=200)
   gam.data2 <- as.data.frame(gam.data2)
   assign("gam.data2", gam.data2, envir = .GlobalEnv)
+
   # construct model
   if (! is.na(randomvar)){
     mod.mu.formula <- as.formula(sprintf("%s ~ bs(%s, df = %s, degree=%s) + %s + random(%s)", dependentvar, smoothterm, mu.df, degree, covariates, randomvar))
@@ -31,18 +32,28 @@ construct_gamlss <- function(dataname, dependentvar, smoothterm, covariates,rand
     mod.mu.null.formula <- as.formula(sprintf("%s ~ %s", dependentvar, covariates))
   }
   
+  
   command <- paste0("mod.tmp <- gamlss(mod.mu.formula, sigma.formula =~ bs(", smoothterm, ", df = ", sigma.df, ", degree = ", degree, ") + ", 
                     covariates, 
                     ", nu.formula = ~1,family=", distribution.fam,", data=gam.data2, control=con)")
+  if(!is.null(simple_mod)){
+    command <- paste0("mod.tmp <- gamlss(mod.mu.formula, sigma.formula =~ bs(", smoothterm, ", df = ", sigma.df, ", degree = ", degree, ") + ", 
+                      covariates, 
+                      ", nu.formula = ~1,family=", distribution.fam,", data=gam.data2, control=con, trace = TRUE, start.from = simple_mod)")
+  }
   
   command.null <- paste0("mod.null.tmp <- gamlss(mod.mu.null.formula, sigma.formula =~  ", covariates, 
                          ", nu.formula = ~1,family=", distribution.fam,", data=gam.data2, control=con)")
+  if(!is.null(simple_mod)){
+    command.null <- paste0("mod.null.tmp <- gamlss(mod.mu.null.formula, sigma.formula =~  ", covariates, 
+                           ", nu.formula = ~1,family=", distribution.fam,", data=gam.data2, control=con, trace = TRUE, start.from = simple_mod)")
+  }
   
   eval(parse(text = command))
   eval(parse(text = command.null))
   
   # performance
-  performance.tb <- data.frame(SClabel=rep("SC",1), BIC=rep(0,1), converged = rep(0,1), partialRsq=rep(0,1), Rsq=rep(0,1))
+  performance.tb <- data.frame(label=rep("SC",1), BIC=rep(0,1), converged = rep(0,1), partialRsq=rep(0,1), Rsq=rep(0,1))
   performance.tb$SClabel[1] <- dependentvar
   performance.tb$BIC[1] <- mod.tmp$sbc
   performance.tb$converged[1] <- mod.tmp$converged

@@ -24,7 +24,7 @@ gam.fit.smooth <- function(region, dataname, smooth_var, covariates, knots, set_
   gam.model <- gam(modelformula, method = "REML", data = gam.data)
   gam.results <- summary(gam.model)
   
-  #Extract gam input data
+  #Extract gam input data, Construct the prediction data
   df <- gam.model$model #extract the data used to build the gam, i.e., a df of y + predictor values 
   np = 1000
   theseVars <- attr(gam.model$terms,"term.labels")
@@ -74,7 +74,7 @@ gam.fit.smooth <- function(region, dataname, smooth_var, covariates, knots, set_
   
   ##Full versus reduced model anova p-value, using parametric bootstrap test.
   if (mod_only==F){
-    anova.smooth.pvalue <- anovaPB(gam.nullmodel,gam.model, n.sim = 1000,test='Chisq', ncpus=1)$`Pr(>Chi)`[2]
+    anova.smooth.pvalue <- anovaPB(gam.nullmodel, gam.model, n.sim = 1000,test='Chisq', ncpus=1)$`Pr(>Chi)`[2]
   }else{
     anova.smooth.pvalue <- NA
   }
@@ -145,7 +145,6 @@ gam.fit.smooth <- function(region, dataname, smooth_var, covariates, knots, set_
     if(length(increasing.range) > 0){
       increase.onset <- min(increasing.range)
       increase.offset <- max(increasing.range) #find oldest age with a significant positive derivative
-      
     }
     if(length(increasing.range) == 0){
       increase.onset <- NA

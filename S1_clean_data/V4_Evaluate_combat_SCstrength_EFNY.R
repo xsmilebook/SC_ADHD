@@ -38,7 +38,7 @@ SCdata.raw$diagnosis <- factor(SCdata.raw$ADHD, levels=c("0", "1"), labels=c("TD
 SCdata.raw$sex <- as.factor(SCdata.raw$sex)
 
 combatadd <- "_covDiagnose"
-SCdata.combat <- readRDS(paste0(interfileFolder, "/SCdata_Yeo", Yeoresolution, "_CV75_sumSCinvnode.sum.msmtcsd.combat_TD_ADHDall", combatadd,".rds"))
+SCdata.combat <- readRDS(paste0(interfileFolder, "/combat/SCdata_Yeo", Yeoresolution, "_CV75_sumSCinvnode.sum.msmtcsd.combat_TD_ADHDall", combatadd,".rds"))
 SCdata.combat$diagnosis <- factor(SCdata.combat$ADHD, levels=c("0", "1"), labels=c("TD", "ADHD"))
 SCdata.combat$sex <- as.factor(SCdata.combat$sex)
 

@@ -7,7 +7,8 @@ library(tidyverse)
 
 homepath <- "D:/code/SC_ADHD"
 interfileFolder <- file.path(homepath, "datasets", "interfileFolder")
-resultFolder <- file.path(homepath, "datasets", "results", "S2")
+combatFolder <- file.path(interfileFolder, "combat")
+resultFolder <- file.path(homepath, "datasets", "results", "S2_development")
 functionFolder.SCDev <- file.path(homepath, "code", "functionFolder.SCDev", "gamfunction")
 
 if (!dir.exists(resultFolder)) {
@@ -22,7 +23,7 @@ cat("Custom functions loaded from:", functionFolder.SCDev, "\n")
 # --- 2. Main Analysis Function ---
 # This function encapsulates the entire GAM analysis pipeline for a given group.
 
-run_gam_analysis_for_group <- function(group_data, group_name, sc_labels_h, edgenum, smooth_var, covariates, resolution, resultFolder, cl) {
+run_gam_analysis_for_group <- function(group_data, group_name, sc_labels_h, edgenum, smooth_var, covariates, resolution, resultFolder, min_age, max_age, cl) {
   
   cat(paste0("\n\n========================================================\n"))
   cat(paste0("===== Starting Full Analysis Pipeline for: ", group_name, " =====\n"))
@@ -74,7 +75,7 @@ run_gam_analysis_for_group <- function(group_data, group_name, sc_labels_h, edge
   gam_stats_df$pfdr <- p.adjust(gam_stats_df$bootstrap_pvalue, method = "fdr")
   gam_stats_df$sig <- (gam_stats_df$pfdr < 0.05)
   
-  stats_filename <- file.path(resultFolder, paste0("gam_stats_", group_name, "_res", resolution, ".rds"))
+  stats_filename <- file.path(resultFolder, paste0("gam_results_", group_name, "_Yeo", resolution, ".rds"))
   saveRDS(gam_stats_df, file = stats_filename)
   cat(paste("Step A complete. GAM statistical results for", group_name, "saved to:", stats_filename, "\n"))
 
@@ -94,21 +95,21 @@ run_gam_analysis_for_group <- function(group_data, group_name, sc_labels_h, edge
       covariates = covariates,
       knots = 3,
       set_fx = TRUE,
-      stats_only = FALSE,
+      stats_only = TRUE,
       mod_only = TRUE
     )
     return(model_object)
   })
   
   names(gam_models_list) <- sc_labels_h
-  models_filename <- file.path(resultFolder, paste0("gam_models_", group_name, "_res", resolution, "_models.rds"))
+  models_filename <- file.path(resultFolder, paste0("gam_model_", group_name, "_Yeo", resolution, "_models.rds"))
   saveRDS(gam_models_list, file = models_filename)
   cat(paste("Step B complete. GAM model objects for", group_name, "saved to:", models_filename, "\n"))
 
   # --- Step C: Generate plot data and perform scaled analysis ---
   cat(paste("\nStep C: Generating plot data and performing scaled analysis for", group_name, "group...\n"))
   
-  agevector <- seq(min(group_data$age, na.rm = TRUE), max(group_data$age, na.rm = TRUE), length.out = 100)
+  agevector <- seq(min_age, max_age, length.out = 100)
   
   clusterExport(cl, varlist = c("gam_models_list", "plotdata_generate", "agevector"), envir = environment())
   
@@ -125,6 +126,7 @@ run_gam_analysis_for_group <- function(group_data, group_name, sc_labels_h, edge
       return(plotdata)
     }
   })
+  
   
   # KEY FIX: Use dplyr::bind_rows() instead of do.call(rbind, ...).
   # bind_rows is more flexible and handles cases where data frames have
@@ -203,6 +205,7 @@ clusterEvalQ(cl, {
 covariates <- "sex + mean_fd"
 smooth_var <- "age"
 
+# matched data
 combat_file <- file.path(interfileFolder, "SCdata_Yeo17_CV75_sumSCinvnode.sum.msmtcsd.combat_match_TD_ADHDall_covDiagnose.rds")
 all_data <- readRDS(combat_file)
 
@@ -217,6 +220,8 @@ analysis_data$sex <- as.factor(analysis_data$sex)
 # Split data into TD and ADHD groups
 TD_data <- analysis_data %>% filter(ADHD == 0)
 ADHD_data <- analysis_data %>% filter(ADHD == 1)
+min_age <- min(analysis_data$age)
+max_age <- max(analysis_data$age)
 
 # TD
 run_gam_analysis_for_group(
@@ -228,6 +233,8 @@ run_gam_analysis_for_group(
   covariates = covariates,
   resolution = resolution,
   resultFolder = resultFolder,
+  min_age = min_age,
+  max_age = max_age,
   cl = cl
 )
 

@@ -88,7 +88,7 @@ dataTable<- merge(harmonized_data, Behavior, by="scanID")
 describe(comtable$SC.118)
 describe(dataTable$SC.118_h)
 corr.test(comtable$SC.118, dataTable$SC.118_h)
-saveRDS(dataTable, paste0(interfileFolder, "/SCdata_Yeo", Yeoresolution, "_CV75_sumSCinvnode.sum.msmtcsd.combat_TD_ADHDall_covDiagnose.rds"))
+saveRDS(dataTable, paste0(interfileFolder, "/combat/SCdata_Yeo", Yeoresolution, "_CV75_sumSCinvnode.sum.msmtcsd.combat_TD_ADHDall_covDiagnose.rds"))
 #########################################
 
 
