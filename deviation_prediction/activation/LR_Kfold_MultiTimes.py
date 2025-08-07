@@ -8,7 +8,7 @@ from sklearn.preprocessing import StandardScaler
 from joblib import Parallel, delayed
 import statsmodels.formula.api as sm
 
-# CodesPath = '/ibmgpfs/cuizaixu_lab/xuhaoshu/SC_ADHD/code/deviation_prediction/activation'
+CodesPath = '/ibmgpfs/cuizaixu_lab/xuhaoshu/SC_ADHD/code/deviation_prediction/activation'
 
 def LR_KFold_RandomCV_MultiTimes(Subjects_Data, Subjects_Score, Covariates, Fold_Quantity,
                                     CVRepeatTimes, ResultantFolder, Parallel_Quantity, Permutation_Flag,
@@ -37,8 +37,9 @@ def LR_KFold_RandomCV_MultiTimes(Subjects_Data, Subjects_Score, Covariates, Fold
                                  'Permutation_Flag': Permutation_Flag, 'RandIndex_File': RandIndex_File};
             sio.savemat(ResultantFolder_TimeI + '/Configuration.mat', Configuration_Mat)
             system_cmd = 'python3 -c ' + '\'import sys;\
-                sys.path.append("' + os.path.dirname(os.path.abspath(__file__)) + '");\
-                from LR_CZ_Random_RegressCovariates import LR_KFold_RandomCV_MultiTimes_Sub; \
+                sys.path.append("' + CodesPath + '");\
+                import LR_Kfold_MultiTimes;\
+                from LR_Kfold_MultiTimes import LR_KFold_RandomCV_MultiTimes_Sub; \
                 import os;\
                 import scipy.io as sio;\
                 Configuration = sio.loadmat("' + ResultantFolder_TimeI + '/Configuration.mat");\
@@ -46,24 +47,23 @@ def LR_KFold_RandomCV_MultiTimes(Subjects_Data, Subjects_Score, Covariates, Fold
                 Subjects_Score = Configuration["Subjects_Score"];\
                 Covariates = Configuration["Covariates"];\
                 Fold_Quantity = Configuration["Fold_Quantity"];\
-                # ComponentNumber_Range = Configuration["ComponentNumber_Range"];\
                 ResultantFolder_TimeI = Configuration["ResultantFolder_TimeI"];\
                 Permutation_Flag = Configuration["Permutation_Flag"];\
                 RandIndex_File = Configuration["RandIndex_File"];\
                 Parallel_Quantity = Configuration["Parallel_Quantity"];\
-                LR_KFold_RandomCV_MultiTimes_Sub(Subjects_Data_Mat_Path[0], Subjects_Score[0], Covariates, Fold_Quantity[0][0], ResultantFolder_TimeI[0], Parallel_Quantity[0][0], Permutation_Flag[0][0], RandIndex_File)\' ';
+                LR_KFold_RandomCV_MultiTimes_Sub(Subjects_Data_Mat_Path[0], Subjects_Score[0], Covariates, Fold_Quantity[0][0], ResultantFolder_TimeI[0], Parallel_Quantity[0][0], Permutation_Flag[0][0], RandIndex_File)\' '
             system_cmd = system_cmd + ' > "' + ResultantFolder_TimeI + '/Time_' + str(i) + '.log" 2>&1\n'
             Finish_File.append(ResultantFolder_TimeI + '/Res_NFold.mat')
             script = open(ResultantFolder_TimeI + '/script.sh', 'w')
             # # Submit jobs
-            script.write('#!/bin/bash\n');
+            script.write('#!/bin/bash\n')
             script.write('#SBATCH --job-name=LINca' + str(i) + '\n')
             script.write('#SBATCH --nodes=1\n')
             script.write('#SBATCH --ntasks=1\n')
-            script.write('#SBATCH --cpus-per-task=2\n')
+            script.write('#SBATCH --cpus-per-task=1\n')
             script.write('#SBATCH --mem-per-cpu 5G\n')
-            script.write('#SBATCH -p q_fat_c\n')
-            script.write('#SBATCH -q high_c\n')
+            script.write('#SBATCH -p q_cn\n')
+            script.write('#SBATCH -q high\n')
             script.write('#SBATCH -o ' + ResultantFolder_TimeI + '/job.%j.out\n')
             script.write('#SBATCH -e ' + ResultantFolder_TimeI + '/job.%j.error.txt\n')
             script.write(system_cmd)
@@ -125,7 +125,7 @@ def LR_KFold_RandomCV(Subjects_Data, Subjects_Score, Covariates, Fold_Quantity,
         Covariates_train = np.delete(Covariates, Fold_J_Index, axis=0)
         Covariates_Quantity = np.shape(Covariates)[1]
         # Controlling covariates from brain data
-        df = {};
+        df = {}
         df_test = {}
         for k in np.arange(Covariates_Quantity):
             df['Covariate_' + str(k)] = Covariates_train[:, k]
