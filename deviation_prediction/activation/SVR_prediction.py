@@ -11,7 +11,7 @@ from scipy.stats import pearsonr, false_discovery_control
 import numpy as np
 import matplotlib.pyplot as plt
 
-data_df = pd.read_csv('/ibmgpfs/cuizaixu_lab/xuhaoshu/SC_ADHD/datasets/ABCD/task_activation/deviation/SCdeviation_nbackActivation_deviation_ADHD_TDtest.csv', low_memory=False)
+data_df = pd.read_csv('D:/code/SC_ADHD/datasets/ABCD/task-fMRI/deviation/SCdeviation_nbackActivation_deviation_ADHD_TDtest.csv', low_memory=False)
 
 # 1. filter the ADHD subset
 data_df = data_df[data_df["if_TD"] == "ADHD"].reset_index(drop=True)
