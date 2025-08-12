@@ -111,7 +111,7 @@ def run_svr_nested_cv(
                 'selector__k': list(range(1, len(feature_cols) + 1)),  # k=1~10
                 'svr__C': [0.1, 0.6, 1],
                 'svr__gamma': ['scale', 'auto'],
-                'svr__kernel': ['linear']
+                'svr__kernel': ['rbf']
             }
 
             inner_kf = KFold(n_splits=inner_folds, shuffle=True, random_state=rs)

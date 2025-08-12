@@ -1,5 +1,4 @@
 import pickle
-
 import pandas
 import pandas as pd
 import os
@@ -17,8 +16,8 @@ def parse_args():
 def main():
     args = parse_args()
 
-    demo_table = pd.read_csv("D:/code/SC_ADHD/datasets/ABCD/task-fMRI/activation/demo_table.csv")
-    result_folder = r"D:\code\SC_ADHD\datasets\results\task_act_prediction"
+    demo_table = pd.read_csv("/ibmgpfs/cuizaixu_lab/xuhaoshu/SC_ADHD/datasets/ABCD/task_activation/task-fMRI/activation/demo_table.csv")
+    result_folder = "/ibmgpfs/cuizaixu_lab/xuhaoshu/SC_ADHD/datasets/results/task_act_prediction"
     permutation_flag = args.permutation
     time_id = args.time_id
     # task_id_list = ["nback", "sst", "MIDallvn", "MIDalrvn", "MIDrpvnf"]
@@ -49,8 +48,11 @@ def main():
     demo_table['sex'] = demo_table['sex'].astype('category')
     demo_table['if_TD'] = demo_table['if_TD'].astype('category')
     confounds_list = ["age", "sex", "meanFD"+task_name, "if_TD"]
-    confounds_data = demo_table[confounds_list]
 
+    demo_table = demo_table[feature_columns + predict_columns + confounds_list]
+    demo_table = demo_table.dropna()
+
+    confounds_data = demo_table[confounds_list]
     demo_table = demo_table[feature_columns + predict_columns]
 
 
@@ -58,9 +60,9 @@ def main():
     for target_column in predict_columns:
         task_result_folder = os.path.join(result_folder, task_id, target_column)
         if permutation_flag:
-            task_result_folder = os.path.join(task_result_folder, "permutation", "linear", "Time_" + time_id)
+            task_result_folder = os.path.join(task_result_folder, "permutation", "rbf", "Time_" + time_id)
         else:
-            task_result_folder = os.path.join(task_result_folder, "formal", "linear", "Time_" + time_id)
+            task_result_folder = os.path.join(task_result_folder, "formal", "rbf", "Time_" + time_id)
         os.makedirs(task_result_folder, exist_ok=True)
 
         result = run_svr_nested_cv(
