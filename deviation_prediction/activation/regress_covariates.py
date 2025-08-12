@@ -3,33 +3,53 @@ import numpy as np
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
 
-def regress_covariates(data, covariates, covariate_names=None, categorical_covariates=None):
+def regress_covariates(train_data, train_covariates,
+                       test_data=None, test_covariates=None,
+                       covariate_names=None, categorical_covariates=None):
     """
     regress_covariates
 
     :parameters
-    - data: shape (n_samples, n_features)
-    - covariates: shape (n_samples, n_covariates)
+    - train_data: shape (n_train_samples, n_features)
+    - train_covariates: shape (n_train_samples, n_covariates)
+    - test_data: shape (n_test_samples, n_features), optional
+    - test_covariates: shape (n_test_samples, n_covariates), optional
     - covariate_names: list of str
     - categorical_covariates: list of str
 
     return:
-    - resid_data: shape (n_samples, n_features)
+    - train_resid_data: shape (n_train_samples, n_features)
+    - test_resid_data: shape (n_test_samples, n_features) if test_data is provided
+    - models: list of fitted OLS models (one per feature)
     """
 
-    if isinstance(covariates, np.ndarray):
-        cov_df = pd.DataFrame(covariates)
+    if isinstance(train_covariates, np.ndarray):
+        train_cov_df = pd.DataFrame(train_covariates)
         if covariate_names is None:
-            covariate_names = [f'cov_{i}' for i in range(covariates.shape[1])]
-        cov_df.columns = covariate_names
+            covariate_names = [f'cov_{i}' for i in range(train_covariates.shape[1])]
+        train_cov_df.columns = covariate_names
     else:
-        cov_df = covariates.copy()
-        covariate_names = cov_df.columns.tolist()
+        train_cov_df = train_covariates.copy()
+        covariate_names = train_cov_df.columns.tolist()
 
-    if isinstance(data, np.ndarray):
-        data_df = pd.DataFrame(data, columns=[f'feature_{i}' for i in range(data.shape[1])])
+    if isinstance(train_data, np.ndarray):
+        train_data_df = pd.DataFrame(train_data, columns=[f'feature_{i}' for i in range(train_data.shape[1])])
     else:
-        data_df = data.copy()
+        train_data_df = train_data.copy()
+
+    if test_data is not None and test_covariates is not None:
+        if isinstance(test_covariates, np.ndarray):
+            test_cov_df = pd.DataFrame(test_covariates, columns=covariate_names)
+        else:
+            test_cov_df = test_covariates.copy()
+
+        if isinstance(test_data, np.ndarray):
+            test_data_df = pd.DataFrame(test_data, columns=[f'feature_{i}' for i in range(test_data.shape[1])])
+        else:
+            test_data_df = test_data.copy()
+    else:
+        test_cov_df = None
+        test_data_df = None
 
     formula_parts = []
     for name in covariate_names:
@@ -40,17 +60,37 @@ def regress_covariates(data, covariates, covariate_names=None, categorical_covar
     formula_base = ' + '.join(formula_parts)
     full_formula = f'data_col ~ {formula_base}'
 
-    resid_data = np.zeros_like(data, dtype=float)
 
-    for col_idx in range(data_df.shape[1]):
-        df_temp = cov_df.copy()
-        df_temp['data_col'] = data_df.iloc[:, col_idx]
+    train_resid_data = np.zeros_like(train_data, dtype=float)
+    test_resid_data = np.zeros_like(test_data, dtype=float) if test_data is not None else None
+
+    models = []
+
+    for col_idx in range(train_data_df.shape[1]):
+        df_temp_train = train_cov_df.copy()
+        df_temp_train['data_col'] = train_data_df.iloc[:, col_idx]
 
         try:
-            model = ols(full_formula, data=df_temp).fit()
-            resid_data[:, col_idx] = model.resid
+            model = ols(full_formula, data=df_temp_train).fit()
+            models.append(model)
+
+            train_resid_data[:, col_idx] = model.resid
+
+            if test_data is not None and test_covariates is not None:
+                df_temp_test = test_cov_df.copy()
+                # residual = real_value - fitting_value
+                df_temp_test['data_col'] = test_data_df.iloc[:, col_idx]
+                test_pred = model.predict(df_temp_test)
+                test_resid_data[:, col_idx] = test_data_df.iloc[:, col_idx] - test_pred
+
         except Exception as e:
             print(f"Feature {col_idx} regression failed: {e}")
-            resid_data[:, col_idx] = np.nan
+            train_resid_data[:, col_idx] = np.nan
+            if test_resid_data is not None:
+                test_resid_data[:, col_idx] = np.nan
+            models.append(None)
 
-    return resid_data
+    if test_data is not None:
+        return train_resid_data, test_resid_data, models
+    else:
+        return train_resid_data, models

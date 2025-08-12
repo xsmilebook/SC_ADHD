@@ -16,7 +16,7 @@ data_df = pd.read_csv(
     low_memory=False)
 
 # 1. filter the ADHD subset
-data_df = data_df[data_df["if_TD"] == "ADHD"].reset_index(drop=True)
+# data_df = data_df[data_df["if_TD"] == "ADHD"].reset_index(drop=True)
 feature_columns = [
     "SC.109_deviationZ", "SC.111_deviationZ", "SC.116_deviationZ", "SC.118_deviationZ",
     "SC.119_deviationZ", "SC.120_deviationZ", "SC.18_deviationZ", "SC.57_deviationZ",
@@ -101,7 +101,7 @@ for run in range(n_original_runs):
     for col in predict_columns:
         all_original_correlations[col].append(run_correlations[col])
 
-# 计算101次运行的平均相关性作为原始相关性
+
 final_original_correlations = {}
 for col in predict_columns:
     final_original_correlations[col] = np.mean(all_original_correlations[col])
